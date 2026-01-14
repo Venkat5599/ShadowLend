@@ -1,1116 +1,164 @@
-# ShadowLend Arcium Development Guide
+# ShadowLend Development Guide
 
-> Reference document for implementing Arcium-based confidential instructions in ShadowLend.
-> Tag this file when implementing new instructions to avoid past mistakes.
+## Overview
 
----
-
-## Table of Contents
-
-1. [Architecture Pattern](#1-architecture-pattern)
-2. [File Structure](#2-file-structure)
-3. [Circuit Design (encrypted-ixs)](#3-circuit-design-encrypted-ixs)
-4. [Handler Design (queue computation)](#4-handler-design-queue-computation)
-5. [Callback Design (token transfer + state update)](#5-callback-design-token-transfer--state-update)
-6. [Account Struct Best Practices](#6-account-struct-best-practices)
-7. [ArgBuilder API Reference](#7-argbuilder-api-reference)
-8. [Privacy & Security Best Practices](#8-privacy--security-best-practices)
-9. [Common Mistakes to Avoid](#9-common-mistakes-to-avoid)
-10. [Checklist for New Instructions](#10-checklist-for-new-instructions)
+ShadowLend is a **privacy-preserving lending protocol** on Solana using **Arcium MXE** for confidential computation. This document explains the implemented architecture and common patterns.
 
 ---
 
-## 1. Architecture Pattern
+## Architecture: Hybrid Privacy Model
 
-### The Correct Flow
+> [!IMPORTANT]
+> ShadowLend uses a **Hybrid Privacy** model, NOT the original "Two-Phase Deposit" design.
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│    Handler      │     │   Arcium MXE    │     │    Callback     │
-│  (Queue Only)   │────▶│   (Compute)     │────▶│  (Execute)      │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       │                       │
-   - Validate input        - Decrypt inputs       - Verify output
-   - Init accounts         - Run circuit          - Token transfer
-   - Queue computation     - Encrypt output       - Update state
-   - Emit "Queued" event   - Sign attestation     - Update aggregates
-                                                  - Emit "Completed" event
-```
+### What's Private
 
-### Key Principle: Token Transfers in Callback
+| Data | Status | Why |
+|------|--------|-----|
+| User Balances | ✅ PRIVATE | Stored as `Enc<Shared, UserState>` |
+| Health Factors | ✅ PRIVATE | Computed inside Arcium MXE |
+| Pool Totals | ✅ PRIVATE | Stored as `Enc<Mxe, PoolState>` |
 
-**ALWAYS** perform token transfers in the **callback** AFTER MXE verification.
+### What's Public
 
-```rust
-// ❌ WRONG: Transfer in handler (before MXE verification)
-pub fn deposit_handler(...) {
-    token::transfer(...)?;  // DANGEROUS! Happens before verification
-    queue_computation(...)?;
-}
-
-// ✅ CORRECT: Transfer in callback (after MXE verification)
-pub fn deposit_callback_handler(...) {
-    let result = output.verify_output(...)?;  // Verify first
-    token::transfer(...)?;  // Safe - only after verification
-}
-```
+| Data | Status | Why |
+|------|--------|-----|
+| Transfer Amounts | PUBLIC | SPL Token compatibility |
+| Liquidation Events | PUBLIC | Protocol safety |
 
 ---
 
-## 2. File Structure
+## Instruction Flows
 
-Each instruction needs 4 files:
+### Atomic Operations (Transfer BEFORE Computation)
 
-```
-instructions/
-└── {instruction_name}/
-    ├── mod.rs              # Re-exports
-    ├── accounts.rs         # Handler accounts (queue_computation_accounts)
-    ├── handler.rs          # Handler logic (queue computation)
-    └── callback.rs         # Callback accounts + logic (token transfer)
-```
-
-Plus the circuit in:
-```
-encrypted-ixs/src/lib.rs    # Arcis circuits (#[instruction])
-```
-
----
-
-## 3. Circuit Design (encrypted-ixs)
-
-### Privacy Model (Fully Confidential - Current)
-
-| Data | Privacy | Encryption | Notes |
-|------|---------|------------|-------|
-| User deposits/borrows | **Private** | `Enc<Shared, UserState>` | User can decrypt with private key |
-| Pool aggregates (TVL) | **Private** | `Enc<Mxe, PoolState>` | Only MXE can decrypt |
-| Health factor | **Private** | Computed inside MXE | Never revealed |
-| Transaction amounts | **Hidden** | Not in events/logs | Only success flags emitted |
-| Fund transfers | **Visible** | SPL transfer | Trade-off for two-phase model |
-| Liquidation amounts | **Visible** | Protocol safety | Necessary for liquidators |
-
-> **Two-Phase Deposit Model**: Users call `fund_account(amount)` (visible SPL transfer) then `deposit(encrypted_amount)` (hidden credit). This decouples visible funding from hidden balance updates.
-
-### Confidential Circuit Template
+**Deposit & Repay** use atomic flows:
+1. Handler performs SPL transfer (User → Vault)
+2. Handler queues Arcium computation with **plaintext** amount
+3. Circuit updates encrypted balances
+4. Callback verifies success and stores state
 
 ```rust
-use arcis_imports::*;
-
-#[encrypted]
-mod circuits {
-    use arcis_imports::*;
-
-    // User state (user can decrypt)
-    pub struct UserState {
-        pub deposit_amount: u128,
-        pub borrow_amount: u128,
-        pub accrued_interest: u128,
-        pub last_interest_calc_ts: i64,
-    }
-
-    // Pool state (only MXE can decrypt)
-    pub struct PoolState {
-        pub total_deposits: u128,
-        pub total_borrows: u128,
-        pub accumulated_interest: u128,
-        pub available_borrow_liquidity: u128,
-    }
-
-    // Output struct - only reveals success flag
-    pub struct ConfidentialDepositOutput {
-        pub new_user_state: UserState,  // Encrypted
-        pub success: bool,               // Revealed
-    }
-
-    #[instruction]
-    pub fn compute_confidential_deposit(
-        amount_ctxt: Enc<Shared, u64>,
-        current_user_state: Enc<Shared, UserState>,
-        current_pool_state: Enc<Mxe, PoolState>,
-        max_creditable: u64,
-    ) -> (Enc<Shared, ConfidentialDepositOutput>, Enc<Mxe, PoolState>) {
-        let amount = amount_ctxt.to_arcis();
-        let mut user_state = current_user_state.to_arcis();
-        let mut pool_state = current_pool_state.to_arcis();
-
-        // Verify user isn't crediting more than funded
-        let valid_amount = amount <= max_creditable;
-        let effective_credit = (valid_amount as u128) * (amount as u128);
-
-        // Update states
-        user_state.deposit_amount = user_state.deposit_amount + effective_credit;
-        pool_state.total_deposits = pool_state.total_deposits + effective_credit;
-
-        let output = ConfidentialDepositOutput {
-            new_user_state: user_state,
-            success: valid_amount,
-        };
-
-        (
-            amount_ctxt.owner.from_arcis(output),
-            Mxe::get().from_arcis(pool_state),
-        )
-    }
-}
-```
-
-### Legacy Template with .reveal() (Deprecated)
-
-> **Note**: The `.reveal()` pattern is deprecated in favor of fully confidential circuits. Use only for backwards compatibility.
-
-```rust
-use arcis_imports::*;
-
-#[encrypted]
-mod circuits {
-    use arcis_imports::*;
-
-    // Shared types
-    pub struct UserState {
-        pub deposit_amount: u128,
-        pub borrow_amount: u128,
-        pub accrued_interest: u128,
-        pub last_interest_calc_ts: i64,
-    }
-
-    // Output struct - uses u64 for revealed values (for SPL token transfers)
-    pub struct DepositOutput {
-        pub new_state: UserState,       // Encrypted
-        pub deposit_delta: u64,         // REVEALED for token transfer
-    }
-
-    #[instruction]
-    pub fn compute_deposit(
-        amount_ctxt: Enc<Shared, u128>,          // User input (user can decrypt)
-        current_state_ctxt: Enc<Mxe, UserState>, // MXE-only state
-    ) -> Enc<Shared, DepositOutput> {
-        let amount = amount_ctxt.to_arcis();
-        let current_state = current_state_ctxt.to_arcis();
-
-        let new_state = UserState {
-            deposit_amount: current_state.deposit_amount + amount,
-            // ... other fields
-        };
-
-        // IMPORTANT: .reveal() makes the value plaintext for on-chain use
-        let revealed_delta = (amount as u64).reveal();
-
-        amount_ctxt.owner.from_arcis(DepositOutput {
-            new_state,
-            deposit_delta: revealed_delta,
-        })
-    }
-}
-```
-
-### Rules
-
-| Rule | Example |
-|------|---------|
-| Use `Enc<Shared, T>` for user inputs | `amount_ctxt: Enc<Shared, u128>` |
-| Use `Enc<Mxe, T>` for internal state | `current_state_ctxt: Enc<Mxe, UserState>` |
-| Use `.reveal()` for values needed on-chain | `amount.reveal()` for token transfers |
-| Use fixed-size types only | `u128`, `i64`, fixed arrays - NO `Vec<T>` |
-| `.reveal()` makes value PUBLIC | Only use for values that need on-chain access |
-
----
-
-## 4. Handler Design (queue computation)
-
-### Template
-
-```rust
-use anchor_lang::prelude::*;
-use arcium_anchor::prelude::*;
-
-use super::accounts::{InstructionName};
-use super::callback::Compute{InstructionName}Callback;
-use crate::error::ErrorCode;
-
-pub fn {instruction_name}_handler(
-    ctx: Context<{InstructionName}>,
-    computation_offset: u64,
-    encrypted_amount: [u8; 32],     // Enc<Shared, u128>
-    encrypted_state: [u8; 64],      // Enc<Mxe, UserState>
-    pub_key: [u8; 32],              // User's x25519 public key
-    nonce: u128,                    // Encryption nonce
-) -> Result<()> {
-    // 1. Validate inputs
-    require!(encrypted_amount != [0u8; 32], ErrorCode::InvalidAmount);
-
-    // 2. Initialize accounts if needed
-    let account = &mut ctx.accounts.some_account;
-    if account.owner == Pubkey::default() {
-        // Initialize...
-    }
-
-    // 3. Store PDA bump for signing
-    ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
-
-    // 4. Build arguments
-    let args = ArgBuilder::new()
-        .x25519_pubkey(pub_key)
-        .plaintext_u128(nonce)
-        .encrypted_u128(encrypted_amount)
-        .encrypted_u128(encrypted_state[0..32].try_into().unwrap())
-        .encrypted_u128(encrypted_state[32..64].try_into().unwrap())
-        .build();
-
-    // 5. Queue computation with callback
-    queue_computation(
-        ctx.accounts,
-        computation_offset,
-        args,
-        None,  // No callback server
-        vec![Compute{InstructionName}Callback::callback_ix(
-            computation_offset,
-            &ctx.accounts.mxe_account,
-            &[],
-        )?],
-        1,  // Number of callback txs
-        0,  // Priority fee
-    )?;
-
-    // 6. Emit event
-    emit!({InstructionName}Queued { ... });
-
-    Ok(())
-}
-```
-
----
-
-## 5. Callback Design (token transfer + state update)
-
-### Template
-
-```rust
-use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
-use arcium_anchor::prelude::*;
-
-use crate::ID;
-use arcium_client::idl::arcium::ID_CONST;
-use crate::error::ErrorCode;
-use crate::state::{Pool, UserObligation};
-
-const COMP_DEF_OFFSET: u32 = comp_def_offset("compute_{instruction_name}");
-
-#[callback_accounts("compute_{instruction_name}")]
-#[derive(Accounts)]
-pub struct Compute{InstructionName}Callback<'info> {
-    // === Arcium Required (always include these) ===
-    pub arcium_program: Program<'info, Arcium>,
-
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET))]
-    pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
-
-    #[account(address = derive_mxe_pda!())]
-    pub mxe_account: Box<Account<'info, MXEAccount>>,
-
-    /// CHECK: Checked by arcium program
-    pub computation_account: UncheckedAccount<'info>,
-
-    #[account(address = derive_cluster_pda!(mxe_account, ErrorCode::ClusterNotSet))]
-    pub cluster_account: Box<Account<'info, Cluster>>,
-
-    #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
-    /// CHECK: Instructions sysvar
-    pub instructions_sysvar: AccountInfo<'info>,
-
-    // === Your State Accounts ===
-    #[account(mut, seeds = [...], bump = ...)]
-    pub pool: Box<Account<'info, Pool>>,
-
-    #[account(mut, seeds = [...], bump = ...)]
-    pub user_obligation: Box<Account<'info, UserObligation>>,
-
-    // === Token Accounts (for transfers) ===
-    pub mint: Box<Account<'info, Mint>>,
-
-    #[account(mut, constraint = user_token_account.mint == mint.key())]
-    pub user_token_account: Box<Account<'info, TokenAccount>>,
-
-    #[account(mut, seeds = [b"vault", ...], bump, token::mint = mint)]
-    pub vault: Box<Account<'info, TokenAccount>>,
-
-    #[account(constraint = user.key() == user_obligation.user)]
-    pub user: Signer<'info>,
-
-    pub token_program: Program<'info, Token>,
-}
-
-pub fn {instruction_name}_callback_handler(
-    ctx: Context<Compute{InstructionName}Callback>,
-    output: SignedComputationOutputs<Compute{InstructionName}Output>,
-) -> Result<()> {
-    // 1. Verify MXE output signature - SDK auto-deserializes
-    let result = match output.verify_output(
-        &ctx.accounts.cluster_account,
-        &ctx.accounts.computation_account,
-    ) {
-        Ok(Compute{InstructionName}Output { field_0 }) => field_0,
-        Err(e) => {
-            msg!("Computation verification failed: {}", e);
-            return Err(ErrorCode::AbortedComputation.into());
-        }
-    };
-
-    // 2. Modern SDK: Access encrypted result directly
-    // result.ciphertexts: Array of encrypted values (user can decrypt with private key)
-    // result.nonce: u128 for client-side decryption
-    require!(
-        !result.ciphertexts.is_empty(),
-        ErrorCode::InvalidComputationOutput
-    );
-
-    // 3. Extract values from verified result
-    // The encrypted output contains the serialized output struct
-    // Position depends on your struct layout (use proper offsets)
-    let encrypted_output = &result.ciphertexts[0];
-    require!(
-        encrypted_output.len() >= expected_size,
-        ErrorCode::InvalidComputationOutput
-    );
-
-    // Example: Extract amount from known offset in output struct
-    let amount_bytes: [u8; 8] = encrypted_output[offset..offset+8]
-        .try_into()
-        .map_err(|_| ErrorCode::InvalidComputationOutput)?;
-    let amount = u64::from_le_bytes(amount_bytes);
-
-    require!(amount > 0, ErrorCode::InvalidAmount);
-
-    // 4. Perform token transfer
-    token::transfer(
-        CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.user_token_account.to_account_info(),
-                to: ctx.accounts.vault.to_account_info(),
-                authority: ctx.accounts.user.to_account_info(),
-            },
-        ),
-        amount,
-    )?;
-
-    // 5. Update state - increment nonce BEFORE state update (replay protection)
-    let state = &mut ctx.accounts.user_obligation;
-    state.state_nonce = state.state_nonce.checked_add(1).ok_or(ErrorCode::MathOverflow)?;
-    state.encrypted_state_blob = result.ciphertexts[0].to_vec();
-    state.last_update_ts = Clock::get()?.unix_timestamp;
-
-    // 6. Update pool aggregates with checked arithmetic
-    ctx.accounts.pool.total_deposits = ctx.accounts.pool.total_deposits
-        .checked_add(amount as u128)
-        .ok_or(ErrorCode::MathOverflow)?;
-
-    // 7. PRIVACY: Emit event without plaintext amounts
-    // Users decrypt result.ciphertexts with their private key
-    emit!({InstructionName}Completed {
-        user: state.user,
-        pool: ctx.accounts.pool.key(),
-        state_commitment: state.state_commitment,
-        state_nonce: state.state_nonce,
-        timestamp: state.last_update_ts,
-    });
-
-    Ok(())
-}
-```
-
----
-
-## 6. Account Struct Best Practices
-
-### Always Box Large Accounts
-
-```rust
-// ✅ CORRECT: Box all Account types to prevent stack overflow
-pub pool: Box<Account<'info, Pool>>,
-pub mxe_account: Box<Account<'info, MXEAccount>>,
-pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
-pub cluster_account: Box<Account<'info, Cluster>>,
-pub pool_account: Box<Account<'info, FeePool>>,
-pub clock_account: Box<Account<'info, ClockAccount>>,
-pub collateral_mint: Box<Account<'info, Mint>>,
-pub user_token_account: Box<Account<'info, TokenAccount>>,
-pub collateral_vault: Box<Account<'info, TokenAccount>>,
-
-// ❌ WRONG: Unboxed accounts cause stack overflow
-pub pool: Account<'info, Pool>,  // Stack overflow!
-```
-
-### Required Arcium Accounts for Handler
-
-```rust
-#[queue_computation_accounts("circuit_name", payer)]
-pub struct MyInstruction<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(init_if_needed, space = 9, payer = payer, seeds = [&SIGN_PDA_SEED], bump, address = derive_sign_pda!())]
-    pub sign_pda_account: Account<'info, SignerAccount>,
-
-    #[account(address = derive_mxe_pda!())]
-    pub mxe_account: Box<Account<'info, MXEAccount>>,
-
-    #[account(mut, address = derive_mempool_pda!(mxe_account, ErrorCode::ClusterNotSet))]
-    /// CHECK: Checked by Arcium program
-    pub mempool_account: UncheckedAccount<'info>,
-
-    #[account(mut, address = derive_execpool_pda!(mxe_account, ErrorCode::ClusterNotSet))]
-    /// CHECK: Checked by Arcium program
-    pub executing_pool: UncheckedAccount<'info>,
-
-    #[account(mut, address = derive_comp_pda!(computation_offset, mxe_account, ErrorCode::ClusterNotSet))]
-    /// CHECK: Checked by Arcium program
-    pub computation_account: UncheckedAccount<'info>,
-
-    #[account(address = derive_comp_def_pda!(crate::COMP_DEF_OFFSET_CIRCUIT_NAME))]
-    pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
-
-    #[account(mut, address = derive_cluster_pda!(mxe_account, ErrorCode::ClusterNotSet))]
-    pub cluster_account: Box<Account<'info, Cluster>>,
-
-    #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
-    pub pool_account: Box<Account<'info, FeePool>>,
-
-    #[account(address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
-    pub clock_account: Box<Account<'info, ClockAccount>>,
-
-    pub system_program: Program<'info, System>,
-    pub arcium_program: Program<'info, Arcium>,
-}
-```
-
-### Required Arcium Accounts for Callback
-
-```rust
-#[callback_accounts("circuit_name")]
-pub struct MyCallback<'info> {
-    pub arcium_program: Program<'info, Arcium>,
-
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET))]
-    pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
-
-    #[account(address = derive_mxe_pda!())]
-    pub mxe_account: Box<Account<'info, MXEAccount>>,
-
-    /// CHECK: Checked by arcium program
-    pub computation_account: UncheckedAccount<'info>,
-
-    #[account(address = derive_cluster_pda!(mxe_account, ErrorCode::ClusterNotSet))]
-    pub cluster_account: Box<Account<'info, Cluster>>,
-
-    #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
-    /// CHECK: Instructions sysvar
-    pub instructions_sysvar: AccountInfo<'info>,
-
-    // ... your custom accounts here
-}
-```
-
----
-
-## 7. ArgBuilder API Reference
-
-Available methods (all encrypted types take `[u8; 32]`):
-
-```rust
-ArgBuilder::new()
-    // Encryption context
-    .x25519_pubkey(pub_key: [u8; 32])    // User's x25519 public key
-
-    // Plaintext values
-    .plaintext_bool(value: bool)
-    .plaintext_u8(value: u8)
-    .plaintext_u16(value: u16)
-    .plaintext_u32(value: u32)
-    .plaintext_u64(value: u64)
-    .plaintext_u128(value: u128)
-    .plaintext_i8(value: i8)
-    .plaintext_i16(value: i16)
-    .plaintext_i32(value: i32)
-    .plaintext_i64(value: i64)
-    .plaintext_i128(value: i128)
-    .plaintext_float(value: f64)
-
-    // Encrypted values (all take [u8; 32])
-    .encrypted_bool(value: [u8; 32])
-    .encrypted_u8(value: [u8; 32])
-    .encrypted_u16(value: [u8; 32])
-    .encrypted_u32(value: [u8; 32])
-    .encrypted_u64(value: [u8; 32])
-    .encrypted_u128(value: [u8; 32])
-    .encrypted_i8(value: [u8; 32])
-    .encrypted_i16(value: [u8; 32])
-    .encrypted_i32(value: [u8; 32])
-    .encrypted_i64(value: [u8; 32])
-    .encrypted_i128(value: [u8; 32])
-    .encrypted_float(value: [u8; 32])
-
-    // Special
-    .plaintext_point(value: [u8; 32])
-    .arcis_ed25519_signature(value: [u8; 64])
-    .account(pubkey: Pubkey, offset: u32, length: u32)  // Read from account
-
-    .build()
-```
-
-### Passing Large Structs
-
-For structs larger than 32 bytes, split into multiple `encrypted_u128()` calls:
-
-```rust
-// UserState is 56 bytes (3×u128 + i64), needs 2 encrypted_u128 calls
+// deposit/handler.rs pattern
+token::transfer(..., amount)?;  // Transfer FIRST
 let args = ArgBuilder::new()
-    .x25519_pubkey(pub_key)
-    .plaintext_u128(nonce)
-    .encrypted_u128(encrypted_amount)
-    .encrypted_u128(encrypted_state[0..32].try_into().unwrap())   // First half
-    .encrypted_u128(encrypted_state[32..64].try_into().unwrap())  // Second half
-    .build();
+    .plaintext_u64(amount)       // Plaintext to circuit
+    ...
+```
+
+### Revealed Operations (Computation BEFORE Transfer)
+
+**Borrow, Withdraw, Liquidate** reveal amounts in callbacks:
+1. Handler queues computation with **encrypted** amount
+2. Circuit verifies HF privately, outputs `revealed_amount`
+3. Callback reads revealed amount and performs SPL transfer
+
+```rust
+// borrow/callback.rs pattern
+let approved = user_output.ciphertexts[4][0] != 0;
+let amount = u64::from_le_bytes(user_output.ciphertexts[5][0..8]...);
+token::transfer(..., amount)?;  // Transfer AFTER verification
 ```
 
 ---
 
-## 8. Privacy & Security Best Practices
+## Circuit Output Structure
 
-### 🔒 Critical Security Vulnerabilities (Fixed in Deposit)
+All circuits return outputs in this ciphertext layout:
 
-These vulnerabilities were identified and fixed in the deposit implementation. **AVOID THESE IN ALL INSTRUCTIONS**:
+| Index | Content | Type |
+|-------|---------|------|
+| 0-3 | `UserState` (4 u128 fields) | Encrypted |
+| 4 | `approved` / `success` flag | Revealed bool |
+| 5 | `revealed_amount` (if applicable) | Revealed u64 |
+| 6 | `revealed_seized` (liquidate only) | Revealed u64 |
 
-#### V1: Insecure State Commitment ❌
+> [!CAUTION]
+> Do NOT use `ciphertexts.len() - 1` to find amounts. Use explicit indices.
 
+---
+
+## Common Mistakes to Avoid
+
+### ❌ Wrong: Using encrypted amount for atomic operations
 ```rust
-// ❌ WRONG: Using first 32 bytes as commitment (not cryptographic)
-let commitment = encrypted_state_blob[..32];
-
-// ✅ CORRECT: Use deterministic hash from encrypted blob
-let commitment_bytes = if encrypted_state_blob.len() >= 32 {
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&encrypted_state_blob[..32]);
-    arr
-} else {
-    [0u8; 32]
-};
-user_obligation.state_commitment = commitment_bytes;
-// Note: This is acceptable for MVP as the blob itself is cryptographically secure
+// BAD - Deposit should use plaintext
+.encrypted_u128(encrypted_amount)
 ```
 
-#### V2: Unsafe Ciphertext Parsing ❌
-
+### ✅ Correct: Use plaintext for atomic operations
 ```rust
-// ❌ WRONG: No bounds checking, hardcoded offsets
-let amount = u64::from_le_bytes(result.ciphertexts[0][24..32].try_into().unwrap());
-
-// ✅ CORRECT: Safe parsing with validation
-require!(!result.ciphertexts.is_empty(), ErrorCode::InvalidComputationOutput);
-require!(result.ciphertexts[0].len() >= 32, ErrorCode::InvalidComputationOutput);
-
-let amount_bytes: [u8; 8] = result.ciphertexts[0][24..32]
-    .try_into()
-    .map_err(|_| ErrorCode::InvalidComputationOutput)?;
-let amount = u64::from_le_bytes(amount_bytes);
-require!(amount > 0, ErrorCode::InvalidDepositAmount);
+// GOOD - Deposit uses plaintext (already transferred)
+.plaintext_u64(amount)
 ```
 
-#### V3: Missing Token Account Owner Validation ❌
-
+### ❌ Wrong: Forgetting encrypted_pool_state
 ```rust
-// ❌ WRONG: Only validates mint, attacker can use victim's account
-#[account(
-    mut,
-    constraint = user_token_account.mint == collateral_mint.key()
-)]
-pub user_token_account: Box<Account<'info, TokenAccount>>,
-
-// ✅ CORRECT: Validate owner matches user
-#[account(
-    mut,
-    constraint = user_token_account.owner == user.key() @ ErrorCode::Unauthorized,
-    constraint = user_token_account.mint == collateral_mint.key() @ ErrorCode::InvalidMint,
-)]
-pub user_token_account: Box<Account<'info, TokenAccount>>,
+// BAD - Missing pool state for liquidity checks
+let args = ArgBuilder::new()
+    .encrypted_u128(user_state[0..32]...)
+    .encrypted_u128(user_state[32..64]...)
+    // Missing pool state!
 ```
 
-#### V4: Missing Pool-Collateral Relationship Check ❌
-
+### ✅ Correct: Always include pool state
 ```rust
-// ❌ WRONG: No validation that mint matches pool's collateral
-pub collateral_mint: Box<Account<'info, Mint>>,
-
-// ✅ CORRECT: Validate mint matches pool configuration
-#[account(
-    mut,
-    constraint = user_token_account.mint == collateral_mint.key() @ ErrorCode::InvalidMint,
-    constraint = collateral_mint.key() == pool.collateral_mint @ ErrorCode::InvalidMint,
-)]
-pub user_token_account: Box<Account<'info, TokenAccount>>,
-```
-
-#### V5: Misleading Overflow Error ❌
-
-```rust
-// ❌ WRONG: Misleading error message
-pool.total_deposits = pool.total_deposits
-    .checked_add(amount as u128)
-    .ok_or(ErrorCode::InvalidDepositAmount)?;  // Wrong error!
-
-// ✅ CORRECT: Proper overflow error
-pool.total_deposits = pool.total_deposits
-    .checked_add(amount as u128)
-    .ok_or(ErrorCode::MathOverflow)?;
-```
-
-#### V6: State Injection Attack ❌
-
-```rust
-// ❌ WRONG: Accepting encrypted_state as parameter (attacker can inject)
-pub fn deposit_handler(
-    ctx: Context<Deposit>,
-    encrypted_state: [u8; 64],  // DANGEROUS!
-) -> Result<()> {
-    let args = ArgBuilder::new()
-        .encrypted_u128(encrypted_state[0..32].try_into().unwrap())
-        .build();
-}
-
-// ✅ CORRECT: Read from on-chain UserObligation
-pub fn deposit_handler(
-    ctx: Context<Deposit>,
-    // No encrypted_state parameter!
-) -> Result<()> {
-    let encrypted_state = if user_obligation.encrypted_state_blob.is_empty() {
-        [0u8; 64]  // First deposit
-    } else {
-        // Read from on-chain account
-        let mut state_arr = [0u8; 64];
-        let len = user_obligation.encrypted_state_blob.len().min(64);
-        state_arr[..len].copy_from_slice(&user_obligation.encrypted_state_blob[..len]);
-        state_arr
-    };
-}
-```
-
-#### V7: Replay Attack (Nonce Timing) ❌
-
-```rust
-// ❌ WRONG: Increment nonce AFTER state update (replay window)
-user_obligation.encrypted_state_blob = new_state;
-user_obligation.state_nonce += 1;  // Too late!
-
-// ✅ CORRECT: Increment nonce BEFORE state update
-user_obligation.state_nonce = user_obligation.state_nonce
-    .checked_add(1)
-    .ok_or(ErrorCode::MathOverflow)?;
-user_obligation.encrypted_state_blob = new_state;
-```
-
-#### V8: Missing Economic Minimum ❌
-
-```rust
-// ❌ WRONG: Only checks encrypted bytes != zero
-require!(encrypted_amount != [0u8; 32], ErrorCode::InvalidDepositAmount);
-
-// ✅ CORRECT: Also validate decrypted amount in callback
-let amount = u64::from_le_bytes(amount_bytes);
-require!(amount > 0, ErrorCode::InvalidDepositAmount);  // Economic minimum
-// TODO: Add minimum deposit threshold (e.g., 1000 lamports)
+// GOOD - Include pool state for all operations
+let args = ArgBuilder::new()
+    .encrypted_u128(user_state[0..32]...)
+    .encrypted_u128(user_state[32..64]...)
+    .encrypted_u128(pool_state[0..32]...)   // Pool state
+    .encrypted_u128(pool_state[32..64]...)  // Pool state
 ```
 
 ---
 
-### 🔐 Privacy Best Practices
+## File Structure
 
-#### Rule 1: NEVER Emit Plaintext Amounts
-
-```rust
-// ❌ WRONG: Amount visible to everyone
-#[event]
-pub struct DepositCompleted {
-    pub user: Pubkey,
-    pub amount: u64,  // PRIVACY LEAK!
-}
-
-// ✅ CORRECT: Only emit commitment and metadata
-#[event]
-pub struct DepositCompleted {
-    pub user: Pubkey,
-    pub pool: Pubkey,
-    pub state_commitment: [u8; 32],  // Opaque hash
-    pub state_nonce: u64,
-    pub timestamp: i64,
-}
 ```
-
-#### Rule 2: NEVER Log Sensitive Data
-
-```rust
-// ❌ WRONG: Logs are public!
-msg!("Deposit amount: {}", amount);
-msg!("User balance: {}", balance);
-
-// ✅ CORRECT: Privacy-safe logging
-msg!("Deposit computation verified and processed");
-msg!("User obligation state updated");
-```
-
-#### Rule 3: User Decryption Pattern
-
-Users can decrypt `Enc<Shared, T>` outputs with their private key:
-
-```rust
-// Circuit returns Enc<Shared, DepositOutput>
-#[instruction]
-pub fn compute_deposit(
-    amount_ctxt: Enc<Shared, u128>,
-    current_state_ctxt: Enc<Mxe, UserState>,
-) -> Enc<Shared, DepositOutput> {  // User can decrypt this!
-    // ...
-    amount_ctxt.owner.from_arcis(DepositOutput {
-        new_state,
-        deposit_delta: amount,
-    })
-}
-```
-
-Client-side decryption (TypeScript):
-```typescript
-// User receives SignedComputationOutputs<DepositOutput>
-// Decrypt with their x25519 private key
-const output = await decryptSharedOutput(
-    signedOutputs,
-    userX25519PrivateKey
-);
-console.log("My deposit:", output.deposit_delta);
-console.log("My new balance:", output.new_state.deposit_amount);
-```
-
-#### Rule 4: What's Safe to Expose
-
-| Data | Public? | Reason |
-|------|---------|--------|
-| User pubkey | ✅ Yes | Necessary for indexing |
-| Pool/mint | ✅ Yes | Asset identification |
-| Operation type | ⚠️ Optional | Minimal metadata leak |
-| Timestamp | ✅ Yes | Acceptable metadata |
-| State commitment | ✅ Yes | Opaque hash |
-| Nonce | ✅ Yes | Replay protection |
-| **Amount** | ❌ **NO** | **Confidential!** |
-| **Balance** | ❌ **NO** | **Confidential!** |
-| **Health factor** | ❌ **NO** | **Confidential!** |
-
----
-
-## 9. Common Mistakes to Avoid
-
-### ❌ Mistake 1: Token Transfer Before MXE Verification
-
-```rust
-// WRONG: If MXE fails, tokens are already transferred!
-pub fn deposit_handler(...) {
-    token::transfer(...)?;       // ❌ DANGEROUS
-    queue_computation(...)?;
-}
-
-// CORRECT: Transfer after verification in callback
-pub fn deposit_callback_handler(...) {
-    output.verify_output(...)?;  // ✅ Verify first
-    token::transfer(...)?;       // ✅ Safe
-}
-```
-
-### ❌ Mistake 2: Unboxed Account Types
-
-```rust
-// WRONG: Stack overflow error
-pub pool: Account<'info, Pool>,                    // ❌
-pub mxe_account: Account<'info, MXEAccount>,       // ❌
-
-// CORRECT: Box all accounts
-pub pool: Box<Account<'info, Pool>>,               // ✅
-pub mxe_account: Box<Account<'info, MXEAccount>>,  // ✅
-```
-
-### ❌ Mistake 3: Using `Vec<T>` in Arcis Circuits
-
-```rust
-// WRONG: Vec not supported
-pub struct UserState {
-    pub transactions: Vec<u128>,  // ❌ NOT SUPPORTED
-}
-
-// CORRECT: Use fixed-size arrays
-pub struct UserState {
-    pub transactions: [u128; 10],  // ✅ Fixed size
-}
-```
-
-### ❌ Mistake 4: Wrong Encryption Type
-
-```rust
-// WRONG: User shouldn't decrypt internal state
-pub fn compute_deposit(
-    current_state: Enc<Shared, UserState>,  // ❌ User can see state!
-) -> ...
-
-// CORRECT: Internal state only for MXE
-pub fn compute_deposit(
-    current_state: Enc<Mxe, UserState>,  // ✅ Only MXE can decrypt
-) -> ...
-```
-
-### ❌ Mistake 5: Using `encrypted_bytes()` (Doesn't Exist)
-
-```rust
-// WRONG: Method doesn't exist
-.encrypted_bytes(&encrypted_state)  // ❌
-
-// CORRECT: Use multiple encrypted_u128 calls
-.encrypted_u128(encrypted_state[0..32].try_into().unwrap())
-.encrypted_u128(encrypted_state[32..64].try_into().unwrap())
-```
-
-### ❌ Mistake 6: Using `anchor_lang::solana_program::hash` (Doesn't Exist in 2.x)
-
-```rust
-// WRONG: Module not available
-anchor_lang::solana_program::hash::hash(...)   // ❌
-anchor_lang::solana_program::keccak::hash(...) // ❌
-
-// CORRECT: Use first bytes of encrypted blob as commitment (MVP)
-// or add solana-program crate directly for hashing
-let commitment = encrypted_blob[..32];  // ✅
-```
-
-### ❌ Mistake 7: Missing `comp_def_offset` Constant
-
-```rust
-// WRONG: Using inline string
-#[account(address = derive_comp_def_pda!(comp_def_offset("compute_deposit")))]
-
-// CORRECT: Define constant at module level
-const COMP_DEF_OFFSET: u32 = comp_def_offset("compute_deposit");
-// Then use:
-#[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET))]
-```
-
-### ❌ Mistake 8: Forgetting to Export from mod.rs
-
-```rust
-// In instructions/deposit/mod.rs
-pub mod accounts;
-pub mod callback;
-pub mod handler;
-
-pub use accounts::*;
-pub use callback::*;
-pub use handler::*;  // ✅ Must export all
-```
-
-### ❌ Mistake 9: Emitting Plaintext Amounts (PRIVACY LEAK)
-
-```rust
-// ❌ WRONG: Defeats confidentiality
-emit!(DepositCompleted {
-    amount: deposit_amount,  // Everyone can see this!
-});
-
-// ✅ CORRECT: Only emit commitment
-emit!(DepositCompleted {
-    state_commitment: user_obligation.state_commitment,
-    state_nonce: user_obligation.state_nonce,
-});
-```
-
-### ❌ Mistake 10: Logging Sensitive Data
-
-```rust
-// ❌ WRONG: Logs are public
-msg!("Deposit amount: {}", amount);
-
-// ✅ CORRECT: Privacy-safe messages
-msg!("Deposit processed");
-```
-
-### ❌ Mistake 11: Accepting Encrypted State as Parameter
-
-```rust
-// ❌ WRONG: State injection attack
-pub fn handler(encrypted_state: [u8; 64]) { ... }
-
-// ✅ CORRECT: Read from on-chain account
-let encrypted_state = user_obligation.encrypted_state_blob;
-```
-
-### ❌ Mistake 12: Missing Token Account Owner Validation
-
-```rust
-// ❌ WRONG: Attacker can use victim's account
-constraint = token_account.mint == mint.key()
-
-// ✅ CORRECT: Validate owner
-constraint = token_account.owner == user.key() @ ErrorCode::Unauthorized
+shadowlend_program/
+├── encrypted-ixs/src/lib.rs      # Arcium circuits
+├── programs/shadowlend_program/
+│   ├── src/
+│   │   ├── lib.rs                # Program entry + instruction routing
+│   │   ├── instructions/
+│   │   │   ├── deposit/
+│   │   │   │   ├── handler.rs    # Atomic: transfer → compute
+│   │   │   │   ├── callback.rs   # State update only
+│   │   │   │   └── accounts.rs   # Token accounts included
+│   │   │   ├── borrow/
+│   │   │   │   ├── handler.rs    # Compute with encrypted amount
+│   │   │   │   └── callback.rs   # Reveal → transfer
+│   │   │   ├── withdraw/         # Same as borrow
+│   │   │   ├── repay/
+│   │   │   │   ├── handler.rs    # Atomic: transfer → compute
+│   │   │   │   └── callback.rs   # State update only
+│   │   │   └── liquidate/
+│   │   │       ├── handler.rs    # Compute with plaintext repay
+│   │   │       └── callback.rs   # Reveal → dual transfer
+│   │   ├── state/                # Pool, UserObligation structs
+│   │   └── error.rs              # Error codes
 ```
 
 ---
 
-## 10. Two-Phase Deposit Model (Confidential)
+## Testing
 
-### Architecture
+```bash
+# Build circuits and program
+anchor build
 
-The two-phase deposit model separates visible token transfers from hidden balance credits:
-
+# Run with local validator
+solana-test-validator --reset
+anchor test --skip-local-validator
 ```
-Phase 1: fund_account(amount)
-  ├─ SPL Transfer: user → vault (amount VISIBLE)
-  ├─ Update: user_obligation.total_funded += amount
-  └─ Emit: AccountFunded { amount, total_funded }
-
-Phase 2: deposit(encrypted_amount)
-  ├─ MXE Circuit: compute_confidential_deposit()
-  ├─ Verify: encrypted_amount <= (total_funded - total_credited)
-  ├─ Update: encrypted user_state.deposit_amount (HIDDEN)
-  ├─ Update: encrypted pool_state.total_deposits (HIDDEN)
-  └─ Emit: DepositCompleted { success } (NO amount)
-```
-
-### State Structure Updates
-
-#### Pool Account
-
-```rust
-pub struct Pool {
-    // ... existing fields ...
-    
-    /// Encrypted pool aggregates (Enc<Mxe, PoolState>)
-    pub encrypted_pool_state: Vec<u8>,
-    
-    /// SHA-256 commitment for pool state verification
-    pub pool_state_commitment: [u8; 32],
-    
-    /// Vault nonce for deposit tracking (u128 for future protection)
-    pub vault_nonce: u128,
-}
-
-pub struct PoolState {
-    pub total_deposits: u128,
-    pub total_borrows: u128,
-    pub accumulated_interest: u128,
-    pub available_borrow_liquidity: u128,
-}
-```
-
-#### UserObligation Account
-
-```rust
-pub struct UserObligation {
-    // ... existing fields ...
-    
-    /// Total tokens user has funded (cumulative, visible)
-    pub total_funded: u64,
-    
-    /// Total tokens user has claimed (cumulative, visible)
-    pub total_claimed: u64,
-    
-    /// Pending withdrawal state
-    pub has_pending_withdrawal: bool,
-    pub withdrawal_request_ts: i64,
-    
-    /// State nonce (u128 for future protection)
-    pub state_nonce: u128,
-}
-```
-
-### Privacy Trade-offs
-
-| Action | Visible | Hidden |
-|--------|---------|--------|
-| `fund_account` | Transfer amount | - |
-| `deposit` | Success flag | Credit amount, new balance |
-| `borrow` | Approval flag | Borrow amount, health factor |
-| `withdraw` | Approval flag | Withdraw amount |
-| `liquidate` | Amounts | - (safety requirement) |
 
 ---
 
-## 11. Checklist for New Instructions
+## Key Principles
 
-### Before Starting
-
-- [ ] Define circuit name: `compute_{instruction_name}`
-- [ ] Define constant: `COMP_DEF_OFFSET_COMPUTE_{NAME}: u32 = comp_def_offset("compute_{name}")`
-- [ ] Plan encryption types: What needs `Enc<Shared>` vs `Enc<Mxe>`?
-- [ ] Plan token flow: Which accounts, which direction?
-
-### Circuit (encrypted-ixs/src/lib.rs)
-
-- [ ] Add output struct: `{Name}Output`
-- [ ] Add `#[instruction]` function: `compute_{name}(...)`
-- [ ] Use `Enc<Shared, T>` for user inputs
-- [ ] Use `Enc<Mxe, T>` for internal state
-- [ ] Return `Enc<Shared, Output>` for user-visible results
-- [ ] No `Vec<T>` - only fixed-size types
-
-### Handler (accounts.rs + handler.rs)
-
-- [ ] Use `#[queue_computation_accounts("compute_{name}", payer)]`
-- [ ] Box ALL `Account<>` types
-- [ ] Include all required Arcium accounts
-- [ ] Store `sign_pda_account.bump = ctx.bumps.sign_pda_account`
-- [ ] Build args with `ArgBuilder::new()...build()`
-- [ ] Queue with `queue_computation(...)`
-- [ ] Emit `{Name}Queued` event
-- [ ] NO token transfers here!
-
-### Callback (callback.rs)
-
-- [ ] Use `#[callback_accounts("compute_{name}")]`
-- [ ] Define local `COMP_DEF_OFFSET` constant
-- [ ] Include instructions_sysvar
-- [ ] Box ALL `Account<>` types
-- [ ] Add token accounts for transfer
-- [ ] Add user Signer with constraint to user_obligation
-- [ ] Call `output.verify_output(...)` first
-- [ ] Then token transfer
-- [ ] Then state update
-- [ ] Then pool aggregate update
-- [ ] Emit `{Name}Completed` event
-
-### lib.rs
-
-- [ ] Export constant: `pub const COMP_DEF_OFFSET_COMPUTE_{NAME}`
-- [ ] Add handler function in module
-- [ ] Add `#[arcium_callback(encrypted_ix = "compute_{name}")]` callback
-
-### Admin Instruction
-
-- [ ] Create `init_compute_{name}_comp_def` instruction
-- [ ] Register with Arcium MXE
-
-### Testing
-
-- [ ] Test handler queues correctly
-- [ ] Test callback verifies and transfers
-- [ ] Test state updates correctly
-- [ ] Test pool aggregates update
-- [ ] Test events emit correctly
-
----
-
-## Quick Reference: Instruction Types
-
-| Instruction | Direction | Callback Transfers |
-|-------------|-----------|-------------------|
-| `deposit`   | User → Vault | user_token → collateral_vault |
-| `withdraw`  | Vault → User | collateral_vault → user_token (PDA signer) |
-| `borrow`    | Vault → User | borrow_vault → user_token (PDA signer) |
-| `repay`     | User → Vault | user_token → borrow_vault |
-| `liquidate` | Complex | Liquidator pays debt, receives collateral |
-
----
-
-*Last updated: 2026-01-13*
+1. **Token transfers happen in Solana handlers, not Arcium circuits**
+2. **Atomic operations = transfer first, then compute**
+3. **Revealed operations = compute first, then transfer revealed amount**
+4. **Always pass encrypted pool state to circuits**
+5. **Use explicit ciphertext indices, not array length**

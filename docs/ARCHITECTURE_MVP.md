@@ -1,4 +1,4 @@
-# ShadowLend V1 Architecture (Arcium-Only)
+# ShadowLend V1 Architecture (Arcium Hybrid Privacy)
 
 **Private Lending Protocol for Solana Privacy Hackathon 2026**
 
@@ -6,13 +6,14 @@
 
 ## Executive Summary
 
-ShadowLend V1 is a **fully confidential** lending protocol built on Solana using **Arcium MXE (Multi-party eXecution Environment)**. Users can deposit collateral, borrow assets, and manage positions while keeping **all transaction amounts, balances, and pool aggregates completely private**.
+ShadowLend V1 is a **privacy-preserving** lending protocol built on Solana using **Arcium MXE (Multi-party eXecution Environment)**. Users can deposit collateral, borrow assets, and manage positions while keeping **balances and health factors completely private**.
 
-**Core Innovation**: 
+**Core Innovation - Hybrid Privacy Model**: 
+- **Encrypted User State**: User balances hidden using `Enc<Shared, UserState>` - user can decrypt with private key
 - **Encrypted Pool State**: Pool TVL hidden using `Enc<Mxe, PoolState>` - only MXE can decrypt
-- **Two-Phase Deposits**: Visible funding decoupled from hidden balance credits
-- **Zero Amount Leakage**: No amounts in events, logs, or callbacks (except liquidations for safety)
-- **User-Decryptable State**: Users decrypt their own balances with private keys via `Enc<Shared, UserState>`
+- **Atomic Deposits**: Single-transaction deposit with public transfer + private state update
+- **Revealed Transfers**: Borrow/Withdraw amounts revealed in callbacks for SPL compatibility
+- **Private Health Factors**: HF calculations happen entirely within Arcium MXE
 
 ---
 
@@ -225,48 +226,38 @@ struct MxeNodeInfo {
 
 ## 4. Core Operations
 
-### A. Deposit (Two-Phase Confidential Model)
+### A. Deposit (Atomic Model)
 
-**Theory**: Deposit is split into two phases to decouple visible funding from hidden balance credits.
+**Theory**: Deposit uses a single atomic transaction where the SPL transfer serves as proof-of-funds for the Arcium computation.
 
-**Phase 1 - Fund Account** (Visible):
-- User transfers tokens to vault via SPL
-- `total_funded` incremented (visible on-chain)
-- Amount IS visible but decoupled from balance
-
-**Phase 2 - Credit Balance** (Hidden):
-- User calls deposit with encrypted amount
-- MXE verifies: `encrypted_amount <= (total_funded - total_credited)`
-- User's encrypted balance updated (HIDDEN)
-- Pool's encrypted TVL updated (HIDDEN)
-- Only success flag emitted (NO amount)
+> [!IMPORTANT]
+> The original "Two-Phase Deposit" design was replaced with this Atomic model to prevent double-spending vulnerabilities.
 
 **Flow**:
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant S as Solana
+    participant S as Solana Handler
+    participant V as Vault
     participant M as Arcium MXE
 
-    Note over U,M: Phase 1: Fund (Visible)
-    U->>S: fund_account(1000 SOL)
-    S->>S: SPL Transfer: user → vault
-    S->>S: total_funded += 1000
-    S->>U: AccountFunded { amount: 1000 }
-
-    Note over U,M: Phase 2: Credit (Hidden)
-    U->>S: deposit(encrypted_amount)
-    S->>M: compute_confidential_deposit()
-    M->>M: Decrypt & verify amount <= max_creditable
+    U->>S: deposit(amount)
+    S->>V: SPL Transfer (amount)
+    Note over S,V: Transfer FIRST (proof-of-funds)
+    S->>M: queue_computation(plaintext_amount)
     M->>M: Update encrypted user_state.deposit_amount
     M->>M: Update encrypted pool_state.total_deposits
-    M->>S: (Enc<UserState>, Enc<PoolState>, success)
-    S->>S: Update encrypted blobs
-    S->>U: DepositCompleted { success } (NO amount)
+    M->>S: Callback: (Enc<UserState>, Enc<PoolState>, success)
+    S->>S: Verify success, store encrypted blobs
+    S->>U: DepositCompleted { success }
 ```
 
-**Privacy**: Credit amount and new balance completely hidden. Only fund transfer amount visible (trade-off).
+**Privacy Trade-off**: 
+- ✅ Deposit amounts ARE visible (SPL transfer is public)
+- ✅ Encrypted balances remain private
+- ✅ No stuck funds vulnerability
+
 
 ---
 
@@ -540,29 +531,32 @@ Deposit_APY = Borrow_APY × U × (1 - Reserve_Factor)
 
 ---
 
-## 10. Privacy Guarantees
+## 10. Privacy Guarantees (Hybrid Model)
 
 | Data                | Visibility | Mechanism           |
 | ------------------- | ---------- | ------------------- |
-| Individual deposits | **HIDDEN** | Encrypted blob      |
-| Individual borrows  | **HIDDEN** | Encrypted blob      |
-| Health factors      | **HIDDEN** | Computed in TEE     |
-| Accrued interest    | **HIDDEN** | Encrypted blob      |
-| Pool totals         | **PUBLIC** | Required for rates  |
-| Liquidation events  | **PUBLIC** | Transparency needed |
+| User balances       | **HIDDEN** | `Enc<Shared, UserState>` - user decrypts |
+| Health factors      | **HIDDEN** | Computed in Arcium MXE only |
+| Pool totals         | **HIDDEN** | `Enc<Mxe, PoolState>` |
+| Deposit amounts     | **PUBLIC** | SPL Transfer (atomic) |
+| Borrow amounts      | **PUBLIC** | Revealed in callback |
+| Repay amounts       | **PUBLIC** | SPL Transfer (atomic) |
+| Withdraw amounts    | **PUBLIC** | Revealed in callback |
+| Liquidation events  | **PUBLIC** | Revealed amounts |
 
-**Result**: Users can lend/borrow privately while protocol remains transparent and trustless.
+**Trade-off**: Transfer amounts are public for SPL compatibility, but **user positions remain private**.
 
 ---
 
 ## Summary
 
-ShadowLend V1 achieves **production-ready private lending** in 3 weeks using:
+ShadowLend V1 achieves **privacy-preserving lending** in 3 weeks using:
 
 - ✅ Arcium MXE for confidential computation (~500ms)
 - ✅ Ed25519 attestations for trustless verification
 - ✅ Encrypted on-chain state ($0.43/user)
 - ✅ Standard DeFi features (deposit, borrow, liquidate, interest)
-- ✅ Zero knowledge of individual positions while maintaining protocol security
+- ✅ **Hybrid Privacy**: Public transfers + Private positions
+- ✅ Atomic operations prevent stuck funds
 
 **Next Steps**: Build the Solana program → Integrate Arcium SDK → Ship demo 🚀
