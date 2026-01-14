@@ -548,7 +548,7 @@ describe("ShadowLend Protocol Tests", () => {
     // This test requires Arcium MXE to be running
     // Tests that encrypted data is properly queued for computation
 
-    it("should queue deposit with encrypted amount (confidential)", async function() {
+    it("should queue deposit with plaintext amount (atomic)", async function() {
       // Skip if Arcium is not configured
       if (!arciumConfigured) {
         console.log("⏭️  Skipping: Arcium MXE not configured (set ARCIUM_CLUSTER_OFFSET env var)");
@@ -581,12 +581,8 @@ describe("ShadowLend Protocol Tests", () => {
         program.programId
       );
 
-      // Encrypt deposit amount (100 tokens = 100 * 10^9 lamports)
+      // Deposit amount (100 tokens = 100 * 10^9 lamports)
       const depositAmount = BigInt(100 * LAMPORTS_PER_SOL);
-      const { encryptedAmount, nonce } = encryptDepositAmount(
-        cipher,
-        depositAmount
-      );
 
       // Create initial encrypted state (zeros for new user)
       const encryptedState = createInitialEncryptedState();
@@ -610,9 +606,7 @@ describe("ShadowLend Protocol Tests", () => {
       const tx = await program.methods
         .deposit(
           computationOffset,
-          Array.from(encryptedAmount) as number[],
-          Array.from(publicKey) as number[],
-          new BN(deserializeLE(nonce).toString())
+          new BN(depositAmount.toString())
         )
         .accountsPartial({
           payer: owner.publicKey,
@@ -665,8 +659,8 @@ describe("ShadowLend Protocol Tests", () => {
       );
       expect(userObligation.pool.toString()).to.equal(poolPda.toString());
 
-      console.log("✅ Deposit queued successfully with encrypted amount");
-      console.log("   - Amount is confidential (only MXE can decrypt)");
+      console.log("✅ Deposit queued successfully with plaintext amount (Atomic Flow)");
+      console.log("   - SPL Transfer proof verified");
       console.log("   - User obligation created with nonce:", userObligation.stateNonce.toString());
     });
 
@@ -764,10 +758,10 @@ describe("ShadowLend Protocol Tests", () => {
       );
 
       const depositAmount = BigInt(10 * LAMPORTS_PER_SOL);
-      const { encryptedAmount, nonce } = encryptDepositAmount(
-        cipher,
-        depositAmount
-      );
+      // const { encryptedAmount, nonce } = encryptDepositAmount(
+      //   cipher,
+      //   depositAmount
+      // );
       const encryptedState = createInitialEncryptedState();
 
       const [userObligationPda] = findUserObligationPda(
@@ -793,9 +787,7 @@ describe("ShadowLend Protocol Tests", () => {
       const tx = await program.methods
         .deposit(
           computationOffset,
-          Array.from(encryptedAmount) as number[],
-          Array.from(publicKey) as number[],
-          new BN(deserializeLE(nonce).toString())
+          new BN(depositAmount.toString())
         )
         .accountsPartial({
           payer: owner.publicKey,

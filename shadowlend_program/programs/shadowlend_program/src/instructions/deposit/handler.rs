@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{self}; // Added token module for transfer
 use arcium_anchor::prelude::*;
 
 use super::accounts::Deposit;
@@ -10,12 +11,10 @@ use crate::error::ErrorCode;
 pub fn deposit_handler(
     ctx: Context<Deposit>,
     computation_offset: u64,
-    encrypted_amount: [u8; 32], // Enc<Shared, u128>
-    pub_key: [u8; 32],          // User's x25519 public key
-    nonce: u128,                // Encryption nonce
+    amount: u64,                // Plaintext amount for Atomic Deposit
 ) -> Result<()> {
     require!(
-        encrypted_amount != [0u8; 32],
+        amount > 0,
         ErrorCode::InvalidDepositAmount
     );
 
@@ -32,8 +31,22 @@ pub fn deposit_handler(
 
     ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
 
-    // Read encrypted state from UserObligation (prevent state injection)
-    let encrypted_state: [u8; 64] = if user_obligation.encrypted_state_blob.is_empty() {
+    // 1. Perform Public SPL Transfer (Atomic Deposit)
+    // Transfer tokens from user to vault NOW.
+    // This serves as proof-of-funds for the circuit.
+    let transfer_accounts = token::Transfer {
+        from: ctx.accounts.user_token_account.to_account_info(),
+        to: ctx.accounts.collateral_vault.to_account_info(),
+        authority: ctx.accounts.payer.to_account_info(),
+    };
+    token::transfer(
+        CpiContext::new(ctx.accounts.token_program.to_account_info(), transfer_accounts),
+        amount,
+    )?;
+
+    // 2. Read encrypted state
+    // Read user state
+    let encrypted_user_state: [u8; 64] = if user_obligation.encrypted_state_blob.is_empty() {
         [0u8; 64]
     } else {
         let mut state_arr = [0u8; 64];
@@ -42,13 +55,24 @@ pub fn deposit_handler(
         state_arr
     };
 
-    // Build args for MXE computation
+    // Read pool state (MXE only)
+    let pool = &ctx.accounts.pool;
+    let encrypted_pool_state: [u8; 64] = if pool.encrypted_pool_state.is_empty() {
+         [0u8; 64]
+    } else {
+         let mut state_arr = [0u8; 64];
+        let len = pool.encrypted_pool_state.len().min(64);
+        state_arr[..len].copy_from_slice(&pool.encrypted_pool_state[..len]);
+        state_arr
+    };
+
+    // 3. Build args for Atomic Deposit (Plaintext Amount)
     let args = ArgBuilder::new()
-        .x25519_pubkey(pub_key)
-        .plaintext_u128(nonce)
-        .encrypted_u128(encrypted_amount)
-        .encrypted_u128(encrypted_state[0..32].try_into().unwrap())
-        .encrypted_u128(encrypted_state[32..64].try_into().unwrap())
+        .plaintext_u64(amount) 
+        .encrypted_u128(encrypted_user_state[0..32].try_into().unwrap())
+        .encrypted_u128(encrypted_user_state[32..64].try_into().unwrap())
+        .encrypted_u128(encrypted_pool_state[0..32].try_into().unwrap())
+        .encrypted_u128(encrypted_pool_state[32..64].try_into().unwrap())
         .build();
 
     queue_computation(

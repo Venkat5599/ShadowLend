@@ -113,22 +113,24 @@ pub fn liquidate_callback_handler(
     let user_output = &result.field_0;
 
     require!(
-        user_output.ciphertexts.len() >= 3,
+        user_output.ciphertexts.len() >= 7,
         ErrorCode::InvalidComputationOutput
     );
 
-    // Extract is_liquidatable flag
-    let is_liquidatable = user_output.ciphertexts[0][0] != 0;
+    // Index 4: Liquidated flag (bool)
+    let is_liquidatable = user_output.ciphertexts[4][0] != 0;
     require!(is_liquidatable, ErrorCode::PositionHealthy);
 
-    // Extract repay_amount and collateral_seized (revealed for liquidation transparency)
+    // Index 5: Revealed Repay Amount (u64)
     let repay_amount = u64::from_le_bytes(
-        user_output.ciphertexts[1][0..8]
+        user_output.ciphertexts[5][0..8]
             .try_into()
             .map_err(|_| ErrorCode::InvalidComputationOutput)?
     );
+
+    // Index 6: Revealed Seized Collateral (u64)
     let collateral_seized = u64::from_le_bytes(
-        user_output.ciphertexts[2][0..8]
+        user_output.ciphertexts[6][0..8]
             .try_into()
             .map_err(|_| ErrorCode::InvalidComputationOutput)?
     );
@@ -181,7 +183,7 @@ pub fn liquidate_callback_handler(
         .checked_add(1)
         .ok_or(ErrorCode::MathOverflow)?;
 
-    let state_ciphertexts: Vec<u8> = user_output.ciphertexts[3..7]
+    let state_ciphertexts: Vec<u8> = user_output.ciphertexts[0..4]
         .iter()
         .flat_map(|c| c.to_vec())
         .collect();

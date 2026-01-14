@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use arcium_anchor::prelude::*;
 
 use crate::error::ErrorCode;
@@ -45,30 +44,9 @@ pub struct ComputeConfidentialDepositCallback<'info> {
     )]
     pub user_obligation: Box<Account<'info, UserObligation>>,
 
-    pub collateral_mint: Box<Account<'info, Mint>>,
-
-    #[account(
-        mut,
-        constraint = user_token_account.owner == user.key() @ ErrorCode::Unauthorized,
-        constraint = user_token_account.mint == collateral_mint.key() @ ErrorCode::InvalidMint,
-        constraint = collateral_mint.key() == pool.collateral_mint @ ErrorCode::InvalidMint,
-    )]
-    pub user_token_account: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        mut,
-        seeds = [b"vault", collateral_mint.key().as_ref(), b"collateral"],
-        bump,
-        token::mint = collateral_mint,
-        token::authority = pool,
-    )]
-    pub collateral_vault: Box<Account<'info, TokenAccount>>,
-
     /// CHECK: Verified via user_obligation.user constraint
     #[account(constraint = user.key() == user_obligation.user)]
     pub user: Signer<'info>,
-
-    pub token_program: Program<'info, Token>,
 }
 
 /// Process MXE deposit result - transfers tokens from user to vault
@@ -102,27 +80,6 @@ pub fn deposit_callback_handler(
     let success = user_output.ciphertexts[0][0] != 0;
     require!(success, ErrorCode::InvalidDepositAmount);
 
-    // Extract deposit amount for transfer (revealed delta is last ciphertext)
-    let deposit_delta_idx = user_output.ciphertexts.len() - 1;
-    let deposit_amount = u64::from_le_bytes(
-        user_output.ciphertexts[deposit_delta_idx][0..8]
-            .try_into()
-            .map_err(|_| ErrorCode::InvalidComputationOutput)?
-    );
-
-    require!(deposit_amount > 0, ErrorCode::InvalidDepositAmount);
-
-    // Transfer tokens from user to vault
-    let transfer_accounts = Transfer {
-        from: ctx.accounts.user_token_account.to_account_info(),
-        to: ctx.accounts.collateral_vault.to_account_info(),
-        authority: ctx.accounts.user.to_account_info(),
-    };
-    token::transfer(
-        CpiContext::new(ctx.accounts.token_program.to_account_info(), transfer_accounts),
-        deposit_amount,
-    )?;
-
     // Update user obligation state
     let user_obligation = &mut ctx.accounts.user_obligation;
     user_obligation.state_nonce = user_obligation
@@ -131,6 +88,7 @@ pub fn deposit_callback_handler(
         .ok_or(ErrorCode::MathOverflow)?;
 
     // Store encrypted state
+    // First 4 ciphertexts are UserState (4 fields: deposit, borrow, interest, ts) as u128s
     let state_ciphertexts: Vec<u8> = user_output.ciphertexts[..4]
         .iter()
         .flat_map(|c| c.to_vec())
@@ -143,10 +101,14 @@ pub fn deposit_callback_handler(
         commitment[i % 32] ^= byte;
     }
     user_obligation.state_commitment = commitment;
-    user_obligation.total_funded = user_obligation
-        .total_funded
-        .checked_add(deposit_amount)
-        .ok_or(ErrorCode::MathOverflow)?;
+    
+    // Note: total_funded is no longer tracked separately in atomic model
+    // but we can increment it if we want to track public "total deposited ever"
+    // For now, let's leave it or remove it. Better to keep it consistent if needed.
+    // However, since we don't have the amount here (it was in the handler), we can't update it easily
+    // unless the circuit reveals it back, which is redundant.
+    // Let's just track last update.
+    user_obligation.last_update_ts = Clock::get()?.unix_timestamp;
     user_obligation.last_update_ts = Clock::get()?.unix_timestamp;
 
     let pool = &mut ctx.accounts.pool;

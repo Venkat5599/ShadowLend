@@ -117,16 +117,12 @@ pub mod shadowlend_program {
     pub fn deposit(
         ctx: Context<Deposit>,
         computation_offset: u64,
-        encrypted_amount: [u8; 32],
-        pub_key: [u8; 32],
-        nonce: u128,
+        amount: u64,
     ) -> Result<()> {
         instructions::deposit::deposit_handler(
             ctx,
             computation_offset,
-            encrypted_amount,
-            pub_key,
-            nonce,
+            amount,
         )
     }
 
@@ -225,16 +221,12 @@ pub mod shadowlend_program {
     pub fn repay(
         ctx: Context<Repay>,
         computation_offset: u64,
-        encrypted_amount: [u8; 32],
-        pub_key: [u8; 32],
-        nonce: u128,
+        amount: u64,
     ) -> Result<()> {
         instructions::repay::repay_handler(
             ctx,
             computation_offset,
-            encrypted_amount,
-            pub_key,
-            nonce,
+            amount,
         )
     }
 

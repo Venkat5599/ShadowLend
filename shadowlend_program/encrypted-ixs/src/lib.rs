@@ -55,55 +55,40 @@ mod circuits {
     // ============================================================
 
     /// Output from confidential deposit computation
-    /// CRITICAL: No amounts are revealed - only success flag
     pub struct ConfidentialDepositOutput {
-        /// Updated user state (user can decrypt via new_user_state encryption)
+        /// Updated user state
         pub new_user_state: UserState,
-        /// Whether deposit was successful (revealed in callback)
+        /// Public success flag
         pub success: bool,
     }
 
-    /// Confidential deposit: credits encrypted amount to user's balance
-    /// 
-    /// PRIVACY: No amounts are revealed in the output!
-    /// The callback only sees user state + success flag.
-    /// Pool state is returned separately with MXE encryption.
+    /// Atomic Confidential Deposit
     ///
-    /// Args:
-    /// - amount_ctxt: User's deposit amount (encrypted with shared key)
-    /// - current_user_state: User's current encrypted state
-    /// - current_pool_state: Pool's current encrypted state (MXE-only)
-    /// - max_creditable: Maximum amount user can credit (total_funded - total_credited)
+    /// HYBRID MODEL:
+    /// - Input `amount` is PLAINTEXT (publicly verified by SPL transfer in handler)
+    /// - Updates encrypted state internally
     #[instruction]
     pub fn compute_confidential_deposit(
-        amount_ctxt: Enc<Shared, u64>,
+        amount: u64, // PLAINTEXT INPUT
         current_user_state: Enc<Shared, UserState>,
         current_pool_state: Enc<Mxe, PoolState>,
-        max_creditable: u64,
     ) -> (Enc<Shared, ConfidentialDepositOutput>, Enc<Mxe, PoolState>) {
-        let amount = amount_ctxt.to_arcis();
         let mut user_state = current_user_state.to_arcis();
         let mut pool_state = current_pool_state.to_arcis();
 
-        // Verify user isn't trying to credit more than they've funded
-        let valid_amount = amount <= max_creditable;
-
-        // Calculate effective credit (0 if invalid, else full amount)
-        let effective_credit = (valid_amount as u128) * (amount as u128);
-
         // Update user's deposit balance
-        user_state.deposit_amount = user_state.deposit_amount + effective_credit;
+        user_state.deposit_amount = user_state.deposit_amount + (amount as u128);
 
         // Update pool totals
-        pool_state.total_deposits = pool_state.total_deposits + effective_credit;
+        pool_state.total_deposits = pool_state.total_deposits + (amount as u128);
 
         let output = ConfidentialDepositOutput {
             new_user_state: user_state,
-            success: valid_amount,
+            success: true,
         };
 
         (
-            amount_ctxt.owner.from_arcis(output),
+            current_user_state.owner.from_arcis(output),
             Mxe::get().from_arcis(pool_state),
         )
     }
@@ -113,22 +98,16 @@ mod circuits {
     // ============================================================
 
     /// Output from confidential borrow computation
-    /// Only reveals approval status via bool field
     pub struct ConfidentialBorrowOutput {
         /// Updated user state (user can decrypt)
         pub new_user_state: UserState,
         /// Whether borrow was approved (HF >= 1.0)
         pub approved: bool,
+        /// Revealed amount for SPL transfer (0 if not approved)
+        pub revealed_amount: u64,
     }
 
     /// Confidential borrow: checks health factor and updates balances
-    /// 
-    /// PRIVACY: Only reveals approval flag, never amounts.
-    /// All balance updates happen inside MXE.
-    ///
-    /// Health Factor Calculation:
-    /// HF = (deposit_value_usd * ltv) / borrow_value_usd
-    /// Approve if HF >= 1.0 (numerator >= denominator)
     #[instruction]
     pub fn compute_confidential_borrow(
         amount_ctxt: Enc<Shared, u64>,
@@ -169,9 +148,13 @@ mod circuits {
         pool_state.available_borrow_liquidity = 
             pool_state.available_borrow_liquidity - borrow_delta;
 
+        // REVEAL Logic: Only reveal amount if approved
+        let revealed = if final_approved { borrow_amount } else { 0 };
+
         let output = ConfidentialBorrowOutput {
             new_user_state: user_state,
             approved: final_approved,
+            revealed_amount: revealed,
         };
 
         (
@@ -185,20 +168,16 @@ mod circuits {
     // ============================================================
 
     /// Output from confidential withdraw computation
-    /// Only reveals approval status
     pub struct ConfidentialWithdrawOutput {
-        /// Updated user state (user can decrypt)
+        /// Updated user state
         pub new_user_state: UserState,
-        /// Whether withdrawal was approved (HF >= 1.0 after)
+        /// Whether withdrawal was approved
         pub approved: bool,
+        /// Revealed amount for SPL transfer
+        pub revealed_amount: u64,
     }
 
-    /// Confidential withdraw: debits encrypted balance without revealing amount
-    /// 
-    /// PRIVACY: Only reveals approval flag.
-    /// Actual withdrawal claim happens in separate step.
-    ///
-    /// Approved if no borrows OR if HF >= 1.0 after withdrawal.
+    /// Confidential withdraw: checks HF and updates balances
     #[instruction]
     pub fn compute_confidential_withdraw(
         amount_ctxt: Enc<Shared, u64>,
@@ -238,10 +217,14 @@ mod circuits {
 
         // Update pool state
         pool_state.total_deposits = pool_state.total_deposits - withdraw_delta;
+        
+        // REVEAL Logic: Only reveal amount if approved
+        let revealed = if approved { withdraw_delta as u64 } else { 0 };
 
         let output = ConfidentialWithdrawOutput {
             new_user_state: user_state,
             approved,
+            revealed_amount: revealed,
         };
 
         (
@@ -269,15 +252,14 @@ mod circuits {
     /// Repayment priority: interest first, then principal
     #[instruction]
     pub fn compute_confidential_repay(
-        amount_ctxt: Enc<Shared, u64>,
+        amount: u64, // PLAINTEXT INPUT
         current_user_state: Enc<Shared, UserState>,
         current_pool_state: Enc<Mxe, PoolState>,
     ) -> (Enc<Shared, ConfidentialRepayOutput>, Enc<Mxe, PoolState>) {
-        let repay_amount = amount_ctxt.to_arcis();
         let mut user_state = current_user_state.to_arcis();
         let mut pool_state = current_pool_state.to_arcis();
 
-        let repay_u128 = repay_amount as u128;
+        let repay_u128 = amount as u128;
 
         // Calculate total debt
         let total_debt = user_state.borrow_amount + user_state.accrued_interest;
@@ -313,7 +295,7 @@ mod circuits {
         };
 
         (
-            amount_ctxt.owner.from_arcis(output),
+            current_user_state.owner.from_arcis(output),
             Mxe::get().from_arcis(pool_state),
         )
     }
@@ -323,24 +305,21 @@ mod circuits {
     // ============================================================
 
     /// Output from confidential liquidation computation
-    /// Only reveals whether liquidation occurred
     pub struct ConfidentialLiquidateOutput {
-        /// Updated user state after liquidation (user can decrypt)
+        /// Updated user state
         pub new_user_state: UserState,
-        /// Whether position was liquidatable and liquidation occurred
+        /// Whether liquidation occurred
         pub liquidated: bool,
+        /// Revealed repay amount for SPL transfer
+        pub revealed_repay: u64,
+        /// Revealed seized collateral for SPL transfer
+        pub revealed_seized: u64,
     }
 
     /// Confidential liquidate: verifies HF < 1.0 and updates balances
-    /// 
-    /// PRIVACY: Only reveals whether liquidation occurred.
-    /// Actual token transfers handled separately with revealed amounts (trade-off).
-    ///
-    /// Liquidation occurs when:
-    /// HF = (deposit * collateral_price * threshold) / (borrow * borrow_price) < 1.0
     #[instruction]
     pub fn compute_confidential_liquidate(
-        repay_amount_ctxt: Enc<Shared, u64>,
+        repay_amount: u64, // PLAINTEXT INPUT
         current_user_state: Enc<Shared, UserState>,
         current_pool_state: Enc<Mxe, PoolState>,
         collateral_price: u64,
@@ -348,7 +327,6 @@ mod circuits {
         liquidation_threshold: u64,
         liquidation_bonus: u64,
     ) -> (Enc<Shared, ConfidentialLiquidateOutput>, Enc<Mxe, PoolState>) {
-        let repay_amount = repay_amount_ctxt.to_arcis();
         let mut user_state = current_user_state.to_arcis();
         let mut pool_state = current_pool_state.to_arcis();
 
@@ -399,10 +377,12 @@ mod circuits {
         let output = ConfidentialLiquidateOutput {
             new_user_state: user_state,
             liquidated: is_liquidatable,
+            revealed_repay: actual_repay as u64,
+            revealed_seized: seized as u64,
         };
 
         (
-            repay_amount_ctxt.owner.from_arcis(output),
+            current_user_state.owner.from_arcis(output),
             Mxe::get().from_arcis(pool_state),
         )
     }

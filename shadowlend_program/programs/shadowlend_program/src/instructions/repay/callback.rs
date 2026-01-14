@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use arcium_anchor::prelude::*;
 
 use crate::error::ErrorCode;
@@ -45,30 +44,9 @@ pub struct ComputeConfidentialRepayCallback<'info> {
     )]
     pub user_obligation: Box<Account<'info, UserObligation>>,
 
-    pub borrow_mint: Box<Account<'info, Mint>>,
-
-    #[account(
-        mut,
-        constraint = user_borrow_account.owner == user.key() @ ErrorCode::Unauthorized,
-        constraint = user_borrow_account.mint == borrow_mint.key() @ ErrorCode::InvalidMint,
-        constraint = borrow_mint.key() == pool.borrow_mint @ ErrorCode::InvalidMint,
-    )]
-    pub user_borrow_account: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        mut,
-        seeds = [b"vault", pool.collateral_mint.as_ref(), b"borrow"],
-        bump,
-        token::mint = borrow_mint,
-        token::authority = pool,
-    )]
-    pub borrow_vault: Box<Account<'info, TokenAccount>>,
-
     /// CHECK: Verified via user_obligation.user constraint
     #[account(constraint = user.key() == user_obligation.user)]
     pub user: Signer<'info>,
-
-    pub token_program: Program<'info, Token>,
 }
 
 /// Process MXE repay result - transfers tokens from user to vault
@@ -99,35 +77,19 @@ pub fn repay_callback_handler(
         ErrorCode::InvalidComputationOutput
     );
 
-    // Extract repay amount (last ciphertext)
-    let repay_delta_idx = user_output.ciphertexts.len() - 1;
-    let repay_amount = u64::from_le_bytes(
-        user_output.ciphertexts[repay_delta_idx][0..8]
-            .try_into()
-            .map_err(|_| ErrorCode::InvalidComputationOutput)?
-    );
+    // Verify success flag
+    let success = user_output.ciphertexts[0][0] != 0;
+    require!(success, ErrorCode::InvalidBorrowAmount);
 
-    require!(repay_amount > 0, ErrorCode::InvalidRepayAmount);
-
-    // Transfer tokens from user to vault
-    let transfer_accounts = Transfer {
-        from: ctx.accounts.user_borrow_account.to_account_info(),
-        to: ctx.accounts.borrow_vault.to_account_info(),
-        authority: ctx.accounts.user.to_account_info(),
-    };
-    let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        transfer_accounts,
-    );
-    token::transfer(transfer_ctx, repay_amount)?;
-
-    // Update user obligation
+    // Update user obligation state
     let user_obligation = &mut ctx.accounts.user_obligation;
     user_obligation.state_nonce = user_obligation
         .state_nonce
         .checked_add(1)
         .ok_or(ErrorCode::MathOverflow)?;
 
+    // Store encrypted state
+    // UserState is 4 ciphertexts
     let state_ciphertexts: Vec<u8> = user_output.ciphertexts[..4]
         .iter()
         .flat_map(|c| c.to_vec())

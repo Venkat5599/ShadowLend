@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Mint, Token, TokenAccount};
 use arcium_anchor::prelude::*;
 
 use crate::state::{Pool, UserObligation};
@@ -31,6 +32,25 @@ pub struct Deposit<'info> {
         bump
     )]
     pub user_obligation: Box<Account<'info, UserObligation>>,
+
+    pub collateral_mint: Box<Account<'info, Mint>>,
+
+    #[account(
+        mut,
+        constraint = user_token_account.owner == payer.key() @ ErrorCode::Unauthorized,
+        constraint = user_token_account.mint == collateral_mint.key() @ ErrorCode::InvalidMint,
+        constraint = collateral_mint.key() == pool.collateral_mint @ ErrorCode::InvalidMint,
+    )]
+    pub user_token_account: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", collateral_mint.key().as_ref(), b"collateral"],
+        bump,
+        token::mint = collateral_mint,
+        token::authority = pool,
+    )]
+    pub collateral_vault: Box<Account<'info, TokenAccount>>,
 
     // === Arcium MXE Accounts ===
     #[account(
@@ -72,5 +92,6 @@ pub struct Deposit<'info> {
 
     // === Programs ===
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
     pub arcium_program: Program<'info, Arcium>,
 }

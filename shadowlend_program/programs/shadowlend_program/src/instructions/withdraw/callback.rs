@@ -94,18 +94,20 @@ pub fn withdraw_callback_handler(
     // field_0: ConfidentialWithdrawOutput (Shared), field_1: PoolState (MXE)
     let user_output = &result.field_0;
 
+    // Validating output length (UserState [4] + Approved [1] + Amount [1] = 6)
     require!(
-        !user_output.ciphertexts.is_empty(),
+        user_output.ciphertexts.len() >= 6,
         ErrorCode::InvalidComputationOutput
     );
 
     // Extract approval and amount
-    let approved = user_output.ciphertexts[0][0] != 0;
+    // Index 4: Approval flag (bool)
+    let approved = user_output.ciphertexts[4][0] != 0;
     require!(approved, ErrorCode::WithdrawRejected);
 
-    let withdraw_delta_idx = user_output.ciphertexts.len() - 1;
+    // Index 5: Revealed Withdraw Amount (u64)
     let withdraw_amount = u64::from_le_bytes(
-        user_output.ciphertexts[withdraw_delta_idx][0..8]
+        user_output.ciphertexts[5][0..8]
             .try_into()
             .map_err(|_| ErrorCode::InvalidComputationOutput)?
     );

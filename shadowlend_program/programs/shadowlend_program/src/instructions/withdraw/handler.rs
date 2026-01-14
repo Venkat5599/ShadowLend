@@ -45,14 +45,27 @@ pub fn withdraw_handler(
     // Get pool LTV for health factor calculation
     let ltv_bps = ctx.accounts.pool.ltv;
 
+    // Read pool state (MXE only)
+    let pool = &ctx.accounts.pool;
+    let encrypted_pool_state: [u8; 64] = if pool.encrypted_pool_state.is_empty() {
+         [0u8; 64]
+    } else {
+         let mut state_arr = [0u8; 64];
+        let len = pool.encrypted_pool_state.len().min(64);
+        state_arr[..len].copy_from_slice(&pool.encrypted_pool_state[..len]);
+        state_arr
+    };
+
     // Build arguments for Arcium MXE computation
-    // Order: pub_key, nonce, amount, state[0..32], state[32..64], prices, ltv
+    // Order: pub_key, nonce, amount, state[0..32], state[32..64], pool_state[0..32], pool_state[32..64], prices, ltv
     let args = ArgBuilder::new()
         .x25519_pubkey(pub_key)
         .plaintext_u128(nonce)
         .encrypted_u128(encrypted_amount)
         .encrypted_u128(encrypted_state[0..32].try_into().unwrap())
         .encrypted_u128(encrypted_state[32..64].try_into().unwrap())
+        .encrypted_u128(encrypted_pool_state[0..32].try_into().unwrap())
+        .encrypted_u128(encrypted_pool_state[32..64].try_into().unwrap())
         .plaintext_u64(SOL_PRICE_CENTS)
         .plaintext_u64(USDC_PRICE_CENTS)
         .plaintext_u16(ltv_bps)
