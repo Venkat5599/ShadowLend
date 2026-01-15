@@ -8,7 +8,7 @@
     "verify": "ANCHOR_PROVIDER_URL=https://api.devnet.solana.com ts-node scripts/verify-deployment.ts",
     "init-pool": "ts-node scripts/initialize-pool.ts",
     "init-comp": "ts-node scripts/init-comp-defs.ts",
-    "deploy:local": "ts-node scripts/deploy-devnet.ts"
+    "deploy:local": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=/home/glitchy_moon/.config/solana/id.json ts-node scripts/deploy-devnet.ts"
   },
   "dependencies": {
     "@arcium-hq/client": "0.5.4",

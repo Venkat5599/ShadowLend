@@ -1,0 +1,11 @@
+{
+  "programId": "6KiV2x1SxqtPALq9gdyxFXZiuWmwFRdsxMNpnyyPThg3",
+  "poolPda": "HYNQndWrm93SuzQBCFpd5BUQhq53JS5YmMnonNdoLonP",
+  "collateralMint": "3N1eDRbg9inviCnokgVFeCQuCgTabge1zZnCNdFAyEgA",
+  "borrowMint": "HurLPgxWWVmFJq6atMYepK7EEzGyQHrcmmVkN9pfaVRB",
+  "collateralVault": "8JLDqQwEw79PUaSuyMHik6CK9iTN5gZSZfZCh5vfUhJq",
+  "borrowVault": "FTVFJTSgWxeRR5BGqB2eg3wvKzhRmRaBpnAYdhaesGQf",
+  "admin": "9AVaR6JcQaX6CJwg5fNivx2qEAQ2nKAn86DRi7vL5kK2",
+  "deployedAt": "2026-01-15T18:24:27.062Z",
+  "network": "localnet/other"
+}

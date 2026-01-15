@@ -31,8 +31,7 @@ bind_address = "0.0.0.0"
 rpc_port = 8899
 rpc_pubsub_enable_block_subscription = true
 # Keep validator running with proper networking settings
-[[test.validator.clone]]
-address = "https://api.mainnet-beta.solana.com"
+
 
 [[test.genesis]]
 address = "F3G6Q9tRicyznCqcZLydJ6RxkwDSBeHWM458J7V6aeyk"

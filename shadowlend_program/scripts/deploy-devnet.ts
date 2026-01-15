@@ -33,6 +33,13 @@ import {
 } from "@solana/spl-token";
 import * as fs from "fs";
 import * as path from "path";
+import {
+  getArciumAccountBaseSeed,
+  getArciumProgramId,
+  getCompDefAccOffset,
+  getMXEAccAddress,
+  buildFinalizeCompDefTx,
+} from "@arcium-hq/client";
 
 // ============================================================
 // Configuration
@@ -106,35 +113,74 @@ async function checkBalance(connection: Connection, pubkey: PublicKey): Promise<
 
 async function initializeCompDefs(
   program: Program<any>,
-  payer: Keypair
+  payer: Keypair,
+  provider: anchor.AnchorProvider
 ): Promise<void> {
   const compDefs = [
-    { name: "Deposit", method: "initComputeDepositCompDef" },
-    { name: "Borrow", method: "initComputeBorrowCompDef" },
-    { name: "Withdraw", method: "initComputeWithdrawCompDef" },
-    { name: "Repay", method: "initComputeRepayCompDef" },
-    { name: "Liquidate", method: "initComputeLiquidateCompDef" },
-    { name: "Interest", method: "initComputeInterestCompDef" },
+    { name: "Deposit", method: "initComputeDepositCompDef", arciumKey: "compute_confidential_deposit" },
+    { name: "Borrow", method: "initComputeBorrowCompDef", arciumKey: "compute_confidential_borrow" },
+    { name: "Withdraw", method: "initComputeWithdrawCompDef", arciumKey: "compute_confidential_withdraw" },
+    { name: "Repay", method: "initComputeRepayCompDef", arciumKey: "compute_confidential_repay" },
+    // { name: "Liquidate", method: "initComputeLiquidateCompDef", arciumKey: "compute_confidential_liquidate" },
+    { name: "Interest", method: "initComputeInterestCompDef", arciumKey: "compute_confidential_interest" },
   ];
 
   console.log("\n📋 Initializing Arcium Computation Definitions...");
+
+  const baseSeedCompDefAcc = getArciumAccountBaseSeed("ComputationDefinitionAccount");
+  const arciumProgramId = getArciumProgramId();
 
   for (const compDef of compDefs) {
     try {
       console.log(`   • ${compDef.name}...`);
       
+      const offset = getCompDefAccOffset(compDef.arciumKey);
+      
+      const compDefPDA = PublicKey.findProgramAddressSync(
+        [baseSeedCompDefAcc, program.programId.toBuffer(), offset],
+        arciumProgramId
+      )[0];
+
+      const mxeAccount = getMXEAccAddress(program.programId);
+
+      // Check if already initialized (account exists)
+      const accountInfo = await provider.connection.getAccountInfo(compDefPDA);
+      if (accountInfo) {
+        console.log(`     ⏭️  Already initialized`);
+        continue;
+      }
+
       const tx = await (program.methods as any)[compDef.method]()
         .accounts({
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          compDefAccount: compDefPDA,
+          mxeAccount: mxeAccount,
         })
         .signers([payer])
         .rpc();
       
-      console.log(`     ✅ Done (tx: ${tx.slice(0, 16)}...)`);
+      console.log(`     ✅ Initialized (tx: ${tx.slice(0, 16)}...)`);
+
+      // Finalize the definition
+      console.log(`     Finalizing...`);
+      const finalizeTx = await buildFinalizeCompDefTx(
+        provider,
+        Buffer.from(offset).readUInt32LE(),
+        program.programId
+      );
+
+      const latestBlockhash = await provider.connection.getLatestBlockhash();
+      finalizeTx.recentBlockhash = latestBlockhash.blockhash;
+      finalizeTx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
+      finalizeTx.sign(payer);
+
+      const finSig = await provider.sendAndConfirm(finalizeTx, [payer]);
+      console.log(`     ✅ Finalized (tx: ${finSig.slice(0, 16)}...)`);
+
     } catch (error: any) {
       if (error.message?.includes("already in use") || error.logs?.some((l: string) => l.includes("already in use"))) {
-        console.log(`     ⏭️  Already initialized`);
+        console.log(`     ⏭️  Already initialized (error caught)`);
       } else {
         console.error(`     ❌ Failed:`, error.message);
         throw error;
@@ -331,7 +377,7 @@ async function main() {
 
   // Step 1: Initialize computation definitions
   if (!skipCompDefs) {
-    await initializeCompDefs(program, payer);
+    await initializeCompDefs(program, payer, provider);
   } else {
     console.log("\n⏭️  Skipping computation definitions (--skip-comp-defs)");
   }
