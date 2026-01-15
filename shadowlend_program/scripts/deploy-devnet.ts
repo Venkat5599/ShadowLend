@@ -39,13 +39,14 @@ import {
   getCompDefAccOffset,
   getMXEAccAddress,
   buildFinalizeCompDefTx,
+  getArciumEnv,
 } from "@arcium-hq/client";
 
 // ============================================================
 // Configuration
 // ============================================================
 
-const PROGRAM_ID = new PublicKey("6KiV2x1SxqtPALq9gdyxFXZiuWmwFRdsxMNpnyyPThg3");
+const PROGRAM_ID = new PublicKey("AQMgx9c9vL1SCnZE7E4r4HRFZpHZDUcZJfdKt5YULRjD");
 
 // PDA Seeds
 const POOL_SEED = Buffer.from("pool");
@@ -64,6 +65,10 @@ const DEFAULT_POOL_CONFIG = {
 
 // Initial liquidity to fund borrow vault (1M USDC with 6 decimals)
 const INITIAL_BORROW_LIQUIDITY = 1_000_000 * 1e6;
+
+// Real Devnet Token Addresses
+const WSOL_DEVNET_MINT = new PublicKey("So11111111111111111111111111111111111111112");
+const USDC_DEVNET_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
 // ============================================================
 // Utility Functions
@@ -129,6 +134,8 @@ async function initializeCompDefs(
 
   const baseSeedCompDefAcc = getArciumAccountBaseSeed("ComputationDefinitionAccount");
   const arciumProgramId = getArciumProgramId();
+  // Set explicit devnet cluster offset
+  getArciumEnv().arciumClusterOffset = 123;
 
   for (const compDef of compDefs) {
     try {
@@ -189,37 +196,15 @@ async function initializeCompDefs(
   }
 }
 
-async function createTestMints(
-  connection: Connection,
-  payer: Keypair
-): Promise<{ collateralMint: PublicKey; borrowMint: PublicKey }> {
-  console.log("\n🪙  Creating test mints...");
+function useRealDevnetMints(): { collateralMint: PublicKey; borrowMint: PublicKey } {
+  console.log("\n🪙  Using real devnet tokens...");
+  console.log(`   • Collateral (wSOL): ${WSOL_DEVNET_MINT.toBase58()}`);
+  console.log(`   • Borrow (USDC):     ${USDC_DEVNET_MINT.toBase58()}`);
   
-  // Create collateral mint (9 decimals like SOL)
-  const collateralMint = await createMint(
-    connection,
-    payer,
-    payer.publicKey,
-    null,
-    9,
-    undefined,
-    { commitment: "confirmed" }
-  );
-  console.log(`   • Collateral Mint: ${collateralMint.toBase58()}`);
-
-  // Create borrow mint (6 decimals like USDC)
-  const borrowMint = await createMint(
-    connection,
-    payer,
-    payer.publicKey,
-    null,
-    6,
-    undefined,
-    { commitment: "confirmed" }
-  );
-  console.log(`   • Borrow Mint:     ${borrowMint.toBase58()}`);
-
-  return { collateralMint, borrowMint };
+  return { 
+    collateralMint: WSOL_DEVNET_MINT, 
+    borrowMint: USDC_DEVNET_MINT 
+  };
 }
 
 async function initializePool(
@@ -382,26 +367,8 @@ async function main() {
     console.log("\n⏭️  Skipping computation definitions (--skip-comp-defs)");
   }
 
-  // Step 2: Create or load mints
-  let collateralMint: PublicKey;
-  let borrowMint: PublicKey;
-
-  if (!skipMints) {
-    const mints = await createTestMints(connection, payer);
-    collateralMint = mints.collateralMint;
-    borrowMint = mints.borrowMint;
-  } else {
-    // Load from existing deployment file
-    const deploymentPath = path.join(__dirname, "../deployment.json");
-    if (!fs.existsSync(deploymentPath)) {
-      console.error("\n❌ --skip-mints requires deployment.json with existing mints");
-      process.exit(1);
-    }
-    const deployment = JSON.parse(fs.readFileSync(deploymentPath, "utf-8"));
-    collateralMint = new PublicKey(deployment.collateralMint);
-    borrowMint = new PublicKey(deployment.borrowMint);
-    console.log(`\n📦 Using existing mints from deployment.json`);
-  }
+  // Step 2: Use real devnet mints (wSOL + USDC)
+  const { collateralMint, borrowMint } = useRealDevnetMints();
 
   // Step 3: Initialize pool
   const poolPda = await initializePool(
@@ -412,16 +379,8 @@ async function main() {
     DEFAULT_POOL_CONFIG
   );
 
-  // Step 4: Fund borrow vault
-  if (!skipMints) {
-    await fundBorrowVault(
-      connection,
-      payer,
-      borrowMint,
-      collateralMint,
-      INITIAL_BORROW_LIQUIDITY
-    );
-  }
+  // Note: Vault funding skipped - users must provide real USDC liquidity
+  console.log("\n💡 Note: Borrow vault requires manual USDC funding for lending.");
 
   // Derive all PDAs for summary
   const [collateralVault] = deriveCollateralVaultPDA(collateralMint, borrowMint);

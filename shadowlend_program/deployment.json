@@ -1,11 +1,11 @@
 {
-  "programId": "6KiV2x1SxqtPALq9gdyxFXZiuWmwFRdsxMNpnyyPThg3",
-  "poolPda": "HYNQndWrm93SuzQBCFpd5BUQhq53JS5YmMnonNdoLonP",
-  "collateralMint": "3N1eDRbg9inviCnokgVFeCQuCgTabge1zZnCNdFAyEgA",
-  "borrowMint": "HurLPgxWWVmFJq6atMYepK7EEzGyQHrcmmVkN9pfaVRB",
-  "collateralVault": "8JLDqQwEw79PUaSuyMHik6CK9iTN5gZSZfZCh5vfUhJq",
-  "borrowVault": "FTVFJTSgWxeRR5BGqB2eg3wvKzhRmRaBpnAYdhaesGQf",
+  "programId": "AQMgx9c9vL1SCnZE7E4r4HRFZpHZDUcZJfdKt5YULRjD",
+  "poolPda": "AsYVZhy1twfeP1b6hALiYmSzLc1G2GRufKG4sL1o63us",
+  "collateralMint": "So11111111111111111111111111111111111111112",
+  "borrowMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "collateralVault": "5fSQMEi2Ja5h2fQpvgBPCuLBzWmGRn4imtCuFdWaUra4",
+  "borrowVault": "8ZC4YDurkQoU6hBokknMRD9uY2T5LMYGrZ41Ku7eBBxp",
   "admin": "9AVaR6JcQaX6CJwg5fNivx2qEAQ2nKAn86DRi7vL5kK2",
-  "deployedAt": "2026-01-15T18:24:27.062Z",
+  "deployedAt": "2026-01-15T19:08:24.294Z",
   "network": "localnet/other"
 }

@@ -6,13 +6,16 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-shadowlend_program = "6KiV2x1SxqtPALq9gdyxFXZiuWmwFRdsxMNpnyyPThg3"
+shadowlend_program = "AQMgx9c9vL1SCnZE7E4r4HRFZpHZDUcZJfdKt5YULRjD"
+
+[programs.devnet]
+shadowlend_program = "AQMgx9c9vL1SCnZE7E4r4HRFZpHZDUcZJfdKt5YULRjD"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

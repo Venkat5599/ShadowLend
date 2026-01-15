@@ -3,7 +3,7 @@
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "deploy": "ANCHOR_PROVIDER_URL=https://api.devnet.solana.com ts-node scripts/deploy-devnet.ts",
+    "deploy": "ANCHOR_PROVIDER_URL=https://api.devnet.solana.com ANCHOR_WALLET=/home/glitchy_moon/.config/solana/id.json ARCIUM_CLUSTER_OFFSET=123 ts-node scripts/deploy-devnet.ts",
     "setup-user": "ANCHOR_PROVIDER_URL=https://api.devnet.solana.com ts-node scripts/setup-user.ts",
     "verify": "ANCHOR_PROVIDER_URL=https://api.devnet.solana.com ts-node scripts/verify-deployment.ts",
     "init-pool": "ts-node scripts/initialize-pool.ts",
