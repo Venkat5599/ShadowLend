@@ -5,6 +5,7 @@ use crate::error::ErrorCode;
 use crate::state::{Pool, UserObligation};
 use crate::ID;
 use arcium_client::idl::arcium::ID_CONST;
+use solana_keccak_hasher::hashv;
 
 const COMP_DEF_OFFSET: u32 = comp_def_offset("compute_confidential_deposit");
 
@@ -32,7 +33,7 @@ pub struct ComputeConfidentialDepositCallback<'info> {
 
     #[account(
         mut,
-        seeds = [Pool::SEED_PREFIX, pool.collateral_mint.as_ref()],
+        seeds = [Pool::SEED_PREFIX, pool.collateral_mint.as_ref(), pool.borrow_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Box<Account<'info, Pool>>,
@@ -95,20 +96,9 @@ pub fn deposit_callback_handler(
         .collect();
     user_obligation.encrypted_state_blob = state_ciphertexts;
 
-    // Update state commitment
-    let mut commitment = [0u8; 32];
-    for (i, byte) in user_obligation.encrypted_state_blob.iter().enumerate() {
-        commitment[i % 32] ^= byte;
-    }
-    user_obligation.state_commitment = commitment;
-    
-    // Note: total_funded is no longer tracked separately in atomic model
-    // but we can increment it if we want to track public "total deposited ever"
-    // For now, let's leave it or remove it. Better to keep it consistent if needed.
-    // However, since we don't have the amount here (it was in the handler), we can't update it easily
-    // unless the circuit reveals it back, which is redundant.
-    // Let's just track last update.
-    user_obligation.last_update_ts = Clock::get()?.unix_timestamp;
+    // Compute keccak256 commitment of encrypted state
+    let commitment = hashv(&[&user_obligation.encrypted_state_blob]);
+    user_obligation.state_commitment = commitment.to_bytes();
     user_obligation.last_update_ts = Clock::get()?.unix_timestamp;
 
     let pool = &mut ctx.accounts.pool;

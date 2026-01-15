@@ -8,7 +8,6 @@ use arcium_client::idl::arcium::ID_CONST;
 use crate::error::ErrorCode;
 
 
-
 /// Accounts for borrow instruction (queues computation only)
 /// Token transfer happens in callback after MXE verification
 #[queue_computation_accounts("compute_confidential_borrow", payer)]
@@ -20,7 +19,7 @@ pub struct Borrow<'info> {
     pub payer: Signer<'info>,
 
     #[account(
-        seeds = [Pool::SEED_PREFIX, pool.collateral_mint.as_ref()],
+        seeds = [Pool::SEED_PREFIX, pool.collateral_mint.as_ref(), pool.borrow_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Box<Account<'info, Pool>>,

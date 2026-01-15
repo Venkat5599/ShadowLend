@@ -6,6 +6,7 @@ use crate::error::ErrorCode;
 use crate::state::{Pool, UserObligation};
 use crate::ID;
 use arcium_client::idl::arcium::ID_CONST;
+use solana_keccak_hasher::hashv;
 
 const COMP_DEF_OFFSET: u32 = comp_def_offset("compute_confidential_withdraw");
 
@@ -33,7 +34,7 @@ pub struct ComputeConfidentialWithdrawCallback<'info> {
 
     #[account(
         mut,
-        seeds = [Pool::SEED_PREFIX, pool.collateral_mint.as_ref()],
+        seeds = [Pool::SEED_PREFIX, pool.collateral_mint.as_ref(), pool.borrow_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Box<Account<'info, Pool>>,
@@ -57,7 +58,7 @@ pub struct ComputeConfidentialWithdrawCallback<'info> {
 
     #[account(
         mut,
-        seeds = [b"vault", collateral_mint.key().as_ref(), b"collateral"],
+        seeds = [b"vault", collateral_mint.key().as_ref(), pool.borrow_mint.as_ref(), b"collateral"],
         bump,
         token::mint = collateral_mint,
         token::authority = pool,
@@ -120,9 +121,11 @@ pub fn withdraw_callback_handler(
 
     // Transfer tokens from vault to user
     let collateral_mint = ctx.accounts.pool.collateral_mint;
+    let borrow_mint = ctx.accounts.pool.borrow_mint;
     let seeds = &[
         Pool::SEED_PREFIX,
         collateral_mint.as_ref(),
+        borrow_mint.as_ref(),
         &[ctx.accounts.pool.bump],
     ];
     let signer_seeds = &[&seeds[..]];
@@ -152,11 +155,9 @@ pub fn withdraw_callback_handler(
         .collect();
     user_obligation.encrypted_state_blob = state_ciphertexts;
 
-    let mut commitment = [0u8; 32];
-    for (i, byte) in user_obligation.encrypted_state_blob.iter().enumerate() {
-        commitment[i % 32] ^= byte;
-    }
-    user_obligation.state_commitment = commitment;
+    // Compute keccak256 commitment of encrypted state (cryptographically secure)
+    let commitment = hashv(&[&user_obligation.encrypted_state_blob]);
+    user_obligation.state_commitment = commitment.to_bytes();
     user_obligation.total_claimed = user_obligation
         .total_claimed
         .checked_add(withdraw_amount)

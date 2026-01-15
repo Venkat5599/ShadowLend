@@ -415,6 +415,21 @@ graph LR
     API -->|Fetch| Frontend[Frontend App]
 ```
 
+## What indexer should track
+For each operation:
+├── Queued event → Mark as "PENDING"
+├── Completed event → Mark as "CONFIRMED", link to Queued
+└── Timeout (no Completed after X blocks) → Mark as "FAILED"
+
+Transaction History:
+├── User: pubkey
+├── Pool: pubkey
+├── Type: deposit/borrow/withdraw/etc
+├── Status: pending/confirmed/failed
+├── Queued TX: signature
+├── Completed TX: signature (nullable)
+└── state_nonce: for ordering
+
 ### Indexed Events
 
 | Event Type       | Data Stored (Public)                         | Privacy                        |
@@ -548,6 +563,128 @@ Deposit_APY = Borrow_APY × U × (1 - Reserve_Factor)
 
 ---
 
+## 11. Assumptions & Constants (MVP)
+
+> **CRITICAL**: These values are hardcoded for the hackathon MVP and must be updated for production.
+
+### Hardcoded Constants
+
+| Constant                 | Value                       | Location                          | Notes                                |
+| ------------------------ | --------------------------- | --------------------------------- | ------------------------------------ |
+| **SOL Price**            | $150.00 (15000 cents)       | `constants.rs`                    | Mock oracle price                    |
+| **USDC Price**           | $1.00 (100 cents)           | `constants.rs`                    | Mock oracle price                    |
+| **LTV (Loan-to-Value)**  | 80% (8000 bps)              | Pool initialization               | Maximum borrowing power              |
+| **Liquidation Threshold**| 85% (8500 bps)              | Pool initialization               | HF < 1.0 triggers liquidation        |
+| **Liquidation Bonus**    | 5% (500 bps)                | Pool initialization               | Liquidator profit incentive          |
+| **Fixed Borrow Rate**    | 5% APY (500 bps)            | Pool initialization               | No dynamic rate model                |
+| **Seconds Per Year**     | 31,536,000                  | Interest circuit                  | Used for APY calculations            |
+
+### Encryption & Privacy Model
+
+| Component                  | Algorithm/Method             | Purpose                            |
+| -------------------------- | ---------------------------- | ---------------------------------- |
+| **User State Encryption**  | `Enc<Shared, UserState>`     | User can decrypt with private key  |
+| **Pool State Encryption**  | `Enc<Mxe, PoolState>`        | Only MXE can decrypt pool TVL      |
+| **Shared Key Derivation**  | x25519 (Arcium SDK)          | User-MXE shared secret             |
+| **Ciphertext Format**      | Arcium ciphertext arrays     | 32-byte encrypted fields           |
+| **State Commitment**       | XOR-based folding hash       | See note below                     |
+
+> [!WARNING]  
+> **State Commitment Issue**: The current implementation uses XOR-based folding (`commitment[i % 32] ^= byte`) instead of SHA-256 as documented in the architecture diagrams. This is weaker than cryptographic hashing. See TODO for upgrade path.
+
+### Attestation & Verification
+
+| Component                  | Method                       | Notes                              |
+| -------------------------- | ---------------------------- | ---------------------------------- |
+| **MXE Output Verification**| `SignedComputationOutputs::verify_output()` | Arcium SDK handles attestation   |
+| **Cluster Verification**   | Cluster PDA check            | Ensures correct MXE cluster        |
+| **Computation Definition** | `comp_def_offset()` macro    | Links circuits to callbacks        |
+| **Replay Protection**      | `state_nonce: u128`          | Increments on every state update   |
+
+### Transaction Privacy Model (By Design)
+
+| Transaction Type            | Privacy Level    | Rationale                                    |
+| --------------------------- | ---------------- | -------------------------------------------- |
+| **Deposit** (External → Internal) | **PUBLIC**   | SPL transfer visible; balance update hidden  |
+| **Repay** (External → Internal)   | **PUBLIC**   | SPL transfer visible; debt update hidden     |
+| **Borrow** (Internal → External)  | **PUBLIC**   | Amount revealed for SPL transfer execution   |
+| **Withdraw** (Internal → External)| **PUBLIC**   | Amount revealed for SPL transfer execution   |
+| **Liquidation**             | **PUBLIC**       | Amounts revealed for market transparency     |
+| **Interest Accrual**        | **PRIVATE**      | Computed entirely in MXE, no amounts exposed |
+| **Balance Queries**         | **PRIVATE**      | User decrypts locally with private key       |
+| **Health Factor**           | **PRIVATE**      | Never revealed; only approve/deny visible    |
+| **Pool TVL**                | **PRIVATE**      | Encrypted in `Enc<Mxe, PoolState>`           |
+
+> [!IMPORTANT]  
+> Transactions happening **within the system** (balance updates, interest) are **PRIVATE**.  
+> Transactions crossing the **system boundary** (deposits, withdrawals, borrows, repays) require **PUBLIC** SPL transfers for token movement.
+
+### Account Size Assumptions
+
+| Account          | Max Encrypted State Size | Notes                              |
+| ---------------- | ------------------------ | ---------------------------------- |
+| UserObligation   | 128 bytes                | 4 × u128 fields (deposit, borrow, interest, ts) |
+| Pool             | 128 bytes                | 4 × u128 fields (totals)           |
+
+---
+
+## 12. TODO (Future Integrations)
+
+> Items to be integrated post-MVP for production readiness.
+
+### P0 (Critical for Security)
+
+- [ ] **SHA-256 State Commitment**: Replace XOR-based commitment with proper SHA-256 hash
+  - Affects: All 6 callback handlers
+  - Risk: Current XOR folding is collision-prone
+  
+- [ ] **Oracle Integration (Pyth)**: Replace hardcoded prices with live Pyth oracle feeds
+  - Current: `SOL_PRICE_CENTS = 15000`, `USDC_PRICE_CENTS = 100`
+  - Target: Pull Pyth price account data in handlers
+  - Impact: All borrow, withdraw, liquidate circuits
+
+### P1 (Important for Functionality)
+
+- [ ] **Dynamic Interest Rates**: Implement utilization-based rate model
+  - Formula: `Borrow_APY = Base_Rate + (U × Slope1) + ...` (see Section 8)
+  - Currently: Fixed 5% APY
+
+- [ ] **Multi-Asset Pools**: Support multiple collateral/borrow pairs
+  - Current: Single SOL/USDC pool
+  - Requires: Pool factory pattern, per-asset risk parameters
+
+- [ ] **Interest Accrual Automation**: Replace on-demand with cron/keeper
+  - Current: Anyone can call `update_interest()` for any user
+  - Risk: Interest could be stale if not triggered
+
+### P2 (Enhancements)
+
+- [ ] **Pool State Encryption Updates**: Store encrypted pool state in callbacks
+  - Current: Only user state updated; pool state from MXE not persisted
+  
+- [ ] **Mainnet Deployment**: Migrate from Devnet to Mainnet
+  - Requires: Audit completion, oracle setup, production Arcium cluster
+
+- [ ] **Frontend Integration**: Complete Next.js dashboard with:
+  - Position display (client-side decryption)
+  - Transaction history (via Helius webhooks)
+  - Health factor warnings
+
+- [ ] **Minimum Deposit/Borrow Amounts**: Add dust prevention checks
+  - Rationale: Prevent spam attacks with micro-transactions
+
+- [ ] **Timelock for Withdrawals**: Add optional withdrawal delay
+  - Uses: `has_pending_withdrawal`, `withdrawal_request_ts` fields (already in place)
+
+### P3 (Nice to Have)
+
+- [ ] **Batch Interest Updates**: Single transaction for multiple users
+- [ ] **Governance**: Pool parameter updates via multisig
+- [ ] **Analytics Dashboard**: Public pool statistics (encrypted aggregates)
+- [ ] **Mobile Wallet Support**: Deep linking for mobile wallets
+
+---
+
 ## Summary
 
 ShadowLend V1 achieves **privacy-preserving lending** in 3 weeks using:
@@ -560,3 +697,33 @@ ShadowLend V1 achieves **privacy-preserving lending** in 3 weeks using:
 - ✅ Atomic operations prevent stuck funds
 
 **Next Steps**: Build the Solana program → Integrate Arcium SDK → Ship demo 🚀
+
+
+## What is private VS public?
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         WHAT AN OBSERVER CAN SEE                                │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  Timeline of Alice's transactions (ALL PUBLIC):                                 │
+│                                                                                 │
+│  Block 100:  Alice → Pool Vault:    +100 SOL  (deposit)                         │
+│  Block 150:  Alice → Pool Vault:    +50 SOL   (deposit)                         │
+│  Block 200:  Pool Vault → Alice:    +2000 USDC (borrow - amount revealed)       │
+│  Block 250:  Alice → Pool Vault:    +500 USDC (repay)                           │
+│  Block 300:  Pool Vault → Alice:    +30 SOL   (withdraw - amount revealed)      │
+│                                                                                 │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                       WHAT AN OBSERVER CANNOT DEDUCE                            │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  ❌ Current SOL balance:         Could be 120 SOL, or less if liquidated        │
+│  ❌ Current USDC debt:           Could be 1500 USDC, or more with interest      │
+│  ❌ Health Factor:               Is Alice at 5.0 (safe) or 1.05 (danger)?       │
+│  ❌ Liquidation threshold:       When will Alice get liquidated?                │
+│  ❌ Interest accrued:            How much interest has accumulated?             │
+│  ❌ Actual borrow capacity:      How much more can Alice borrow?                │
+│  ❌ Pool TVL:                    What's the total value locked?                 │
+│  ❌ Pool utilization:            What % of pool is being borrowed?              │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
