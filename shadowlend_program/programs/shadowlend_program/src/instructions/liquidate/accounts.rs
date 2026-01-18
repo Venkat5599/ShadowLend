@@ -1,9 +1,11 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Mint, Token, TokenAccount};
 use arcium_anchor::prelude::*;
 
 use crate::state::{Pool, UserObligation};
 use crate::{SignerAccount, ID};
-use arcium_client::idl::arcium::ID_CONST;
+use crate::ID_CONST;
+
 
 use crate::error::ErrorCode;
 
@@ -41,7 +43,6 @@ pub struct Liquidate<'info> {
         payer = payer,
         seeds = [&SIGN_PDA_SEED],
         bump,
-        address = derive_sign_pda!(),
     )]
     pub sign_pda_account: Account<'info, SignerAccount>,
 
@@ -72,7 +73,35 @@ pub struct Liquidate<'info> {
     #[account(address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
     pub clock_account: Box<Account<'info, ClockAccount>>,
 
+    // === Token Accounts for Optimistic Repayment ===
+    pub borrow_mint: Box<Account<'info, Mint>>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", pool.collateral_mint.as_ref(), pool.borrow_mint.as_ref(), b"borrow"],
+        bump,
+        token::mint = borrow_mint,
+        token::authority = pool,
+    )]
+    pub borrow_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        constraint = liquidator_borrow_account.owner == payer.key() @ ErrorCode::Unauthorized,
+        constraint = liquidator_borrow_account.mint == borrow_mint.key() @ ErrorCode::InvalidMint,
+        constraint = borrow_mint.key() == pool.borrow_mint @ ErrorCode::InvalidMint,
+    )]
+    pub liquidator_borrow_account: Box<Account<'info, TokenAccount>>,
+
+    // === Pyth Oracle Accounts ===
+    /// CHECK: Pyth SOL/USD price update account - validated in handler
+    pub sol_price_update: UncheckedAccount<'info>,
+
+    /// CHECK: Pyth USDC/USD price update account - validated in handler
+    pub usdc_price_update: UncheckedAccount<'info>,
+
     // === Programs ===
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
     pub arcium_program: Program<'info, Arcium>,
 }

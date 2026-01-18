@@ -3,7 +3,8 @@ use arcium_anchor::prelude::*;
 
 use crate::state::{Pool, UserObligation};
 use crate::{SignerAccount, ID};
-use arcium_client::idl::arcium::ID_CONST;
+use crate::ID_CONST;
+
 
 use crate::error::ErrorCode;
 
@@ -38,7 +39,6 @@ pub struct UpdateInterest<'info> {
         payer = payer,
         seeds = [&SIGN_PDA_SEED],
         bump,
-        address = derive_sign_pda!(),
     )]
     pub sign_pda_account: Account<'info, SignerAccount>,
 

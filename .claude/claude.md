@@ -162,3 +162,347 @@ anchor test --skip-local-validator
 3. **Revealed operations = compute first, then transfer revealed amount**
 4. **Always pass encrypted pool state to circuits**
 5. **Use explicit ciphertext indices, not array length**
+6. **Always pass Pyth oracle accounts to borrow/withdraw/liquidate**
+
+---
+
+## Pyth Oracle Integration
+
+> [!IMPORTANT]
+> Pyth oracle is used for real-time pricing. **All borrow, withdraw, and liquidate instructions require Pyth price update accounts.**
+
+### Feed IDs (Mainnet & Devnet)
+
+| Asset | Feed ID |
+|-------|---------|
+| SOL/USD | `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
+| USDC/USD | `0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a` |
+
+### Account Structure
+
+```rust
+// borrow/withdraw/liquidate accounts.rs
+pub struct Borrow<'info> {
+    // ... other accounts ...
+    
+    /// CHECK: Pyth SOL/USD price update - validated in handler
+    pub sol_price_update: UncheckedAccount<'info>,
+    
+    /// CHECK: Pyth USDC/USD price update - validated in handler
+    pub usdc_price_update: UncheckedAccount<'info>,
+}
+```
+
+### Handler Pattern
+
+```rust
+// Read prices before building Arcium args
+let clock = Clock::get()?;
+let sol_price_cents = get_price_from_pyth_account(
+    &ctx.accounts.sol_price_update.to_account_info(),
+    &SOL_USD_FEED_ID,
+    &clock,
+)?;
+let usdc_price_cents = get_price_from_pyth_account(
+    &ctx.accounts.usdc_price_update.to_account_info(),
+    &USDC_USD_FEED_ID,
+    &clock,
+)?;
+```
+
+---
+
+## Pyth Integration Mistakes to Avoid
+
+### ❌ Wrong: Using `pyth-solana-receiver-sdk`
+
+```toml
+# BAD - SDK incompatible with solana-program 2.x
+pyth-solana-receiver-sdk = "0.5.0"
+```
+
+### ✅ Correct: Manual account parsing
+
+```rust
+// GOOD - Use custom parser in constants.rs
+use crate::constants::{get_price_from_pyth_account, SOL_USD_FEED_ID};
+
+let price = get_price_from_pyth_account(&account, &SOL_USD_FEED_ID, &clock)?;
+```
+
+### ❌ Wrong: Using `Account<PriceUpdateV2>` type
+
+```rust
+// BAD - PriceUpdateV2 requires incompatible SDK
+pub sol_price_update: Account<'info, PriceUpdateV2>,
+```
+
+### ✅ Correct: Using `UncheckedAccount`
+
+```rust
+// GOOD - Manual validation in handler
+/// CHECK: Validated via get_price_from_pyth_account
+pub sol_price_update: UncheckedAccount<'info>,
+```
+
+### ❌ Wrong: Forgetting oracle accounts
+
+```rust
+// BAD - Missing price feeds for HF calculation
+pub struct Borrow<'info> {
+    pub payer: Signer<'info>,
+    pub pool: Account<'info, Pool>,
+    // Missing sol_price_update and usdc_price_update!
+}
+```
+
+### ❌ Wrong: Not checking price staleness
+
+```rust
+// BAD - Stale prices can be exploited
+let price = account.data[offset..];  // No age check!
+```
+
+### ✅ Correct: Use staleness check
+
+```rust
+// GOOD - Enforces 30 second max age
+let price = get_price_from_pyth_account(&account, feed_id, &clock)?;  // Built-in check
+```
+
+---
+
+## Arcium v0.5.x PDA Issues and Fixes
+
+> [!IMPORTANT]
+> These are critical mistakes we discovered while integrating Arcium SDK v0.5.4. Incorrect PDA derivation causes `ConstraintAddress`, `ConstraintSeeds`, or `AccountNotInitialized` errors.
+
+### Documentation Links
+
+- [Arcium v0.5 Migration Guide](https://docs.arcium.com/developers/migration/migration-v0.4-to-v0.5)
+- [Arcium JS Client Library](https://docs.arcium.com/developers/js-client-library)
+- [Arcium Encryption Guide](https://docs.arcium.com/developers/js-client-library/encryption)
+- [Computation Definition Accounts](https://docs.arcium.com/developers/program/computation-def-accs)
+
+---
+
+### Issue 1: `ID_CONST` Import Conflict (comp_def PDA Mismatch)
+
+**Symptom:** `ConstraintSeeds` or `ConstraintAddress` error on `comp_def_account`
+
+**Root Cause:** The `derive_comp_def_pda!` macro uses `ID_CONST` internally. If you import `ID_CONST` from the wrong source, the PDA is derived with the wrong program ID.
+
+#### ❌ Wrong: Importing Arcium's ID_CONST
+
+```rust
+// BAD - This imports Arcium's program ID, not yours!
+use arcium_client::idl::arcium::ID_CONST;
+
+#[account(address = derive_comp_def_pda!(crate::COMP_DEF_OFFSET_COMPUTE_DEPOSIT))]
+pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+```
+
+#### ✅ Correct: Import from crate root
+
+```rust
+// GOOD - declare_id! creates ID_CONST with YOUR program ID
+use crate::ID_CONST;
+
+#[account(address = derive_comp_def_pda!(crate::COMP_DEF_OFFSET_COMPUTE_DEPOSIT))]
+pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+```
+
+**Explanation:** 
+- `declare_id!("YourProgramId")` creates both `ID` and `ID_CONST` at the crate root
+- The `derive_comp_def_pda!` macro looks for `ID_CONST` in scope
+- Importing `arcium_client::idl::arcium::ID_CONST` shadows your program's ID with Arcium's ID
+- Arcium's `InitComputationDefinition` expects your program ID as the seed, causing a mismatch
+
+---
+
+### Issue 2: `sign_pda_account` Constraints Conflict
+
+**Symptom:** `ConstraintSeeds` error - Left and Right PDAs don't match
+
+**Root Cause:** Using both `seeds` and `address = derive_sign_pda!()` causes a conflict because they derive PDAs using different program IDs.
+
+#### ❌ Wrong: Using both seeds AND address constraints
+
+```rust
+// BAD - seeds uses YOUR program ID, derive_sign_pda!() uses Arcium's ID_CONST
+#[account(
+    init_if_needed,
+    space = 9,
+    payer = payer,
+    seeds = [&SIGN_PDA_SEED],
+    bump,
+    address = derive_sign_pda!(),  // Conflict!
+)]
+pub sign_pda_account: Account<'info, SignerAccount>,
+```
+
+#### ✅ Correct: Use only seeds constraint
+
+```rust
+// GOOD - Only use seeds, Anchor derives the PDA with YOUR program ID
+#[account(
+    init_if_needed,
+    space = 9,
+    payer = payer,
+    seeds = [&SIGN_PDA_SEED],
+    bump,
+)]
+pub sign_pda_account: Account<'info, SignerAccount>,
+```
+
+**Explanation:**
+- `seeds = [&SIGN_PDA_SEED]` derives PDA using `PublicKey::find_program_address(..., &program_id)`
+- `derive_sign_pda!()` internally uses `ID_CONST` which could be wrong if imported incorrectly
+- For `sign_pda_account`, you only need the `seeds` constraint - Anchor handles derivation
+
+---
+
+### Issue 3: Missing Bump Assignment
+
+**Symptom:** `AccountNotInitialized` or runtime errors when CPI signing
+
+**Root Cause:** When using `init_if_needed`, you must manually set the bump on the account.
+
+#### ❌ Wrong: Forgetting bump assignment
+
+```rust
+// BAD - Bump not set, CPI signing will fail
+pub fn deposit_handler(ctx: Context<Deposit>, ...) -> Result<()> {
+    // Missing: ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
+    
+    queue_computation(ctx.accounts, ...)?;
+    Ok(())
+}
+```
+
+#### ✅ Correct: Set bump from context
+
+```rust
+// GOOD - Set bump for CPI signing
+pub fn deposit_handler(ctx: Context<Deposit>, ...) -> Result<()> {
+    // Set the bump for the sign_pda_account
+    ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
+    
+    queue_computation(ctx.accounts, ...)?;
+    Ok(())
+}
+```
+
+---
+
+### Issue 4: TypeScript PDA Derivation Mismatch
+
+**Symptom:** `AccountNotInitialized` or `ConstraintAddress` on client side
+
+**Root Cause:** TypeScript uses different program ID than on-chain derivation.
+
+#### ❌ Wrong: Using Arcium program ID for comp_def
+
+```typescript
+// BAD - Using Arcium program ID
+const arciumProgramId = getArciumProgramId();
+const compDefAccount = getCompDefAccAddress(arciumProgramId, compDefOffsetNum);
+```
+
+#### ✅ Correct: Use YOUR program ID
+
+```typescript
+// GOOD - Use your program ID
+const compDefAccount = getCompDefAccAddress(program.programId, compDefOffsetNum);
+```
+
+---
+
+### Issue 5: signPdaAccount Not Needed in Client
+
+**Symptom:** N/A (but cleaner code)
+
+**Root Cause:** When `sign_pda_account` uses `seeds` constraint, Anchor auto-derives it.
+
+#### ❌ Wrong: Manually passing signPdaAccount
+
+```typescript
+// BAD - Unnecessary manual derivation
+const [signPda] = deriveSignerPda(program.programId);
+
+.accountsPartial({
+    // ...
+    signPdaAccount: signPda,  // Not needed!
+})
+```
+
+#### ✅ Correct: Let Anchor derive it
+
+```typescript
+// GOOD - Anchor derives from seeds constraint automatically
+.accountsPartial({
+    computationAccount: arciumAccounts.computationAccount,
+    clusterAccount: arciumAccounts.clusterAccount,
+    mxeAccount: arciumAccounts.mxeAccount,
+    // signPdaAccount omitted - auto-derived
+})
+```
+
+---
+
+### Quick Reference: Correct Import Pattern
+
+```rust
+// src/lib.rs
+use anchor_lang::prelude::*;
+use arcium_anchor::prelude::*;
+
+declare_id!("YourProgramIdHere");  // Creates ID and ID_CONST
+
+#[arcium_program]
+pub mod your_program {
+    use super::*;
+    // ...
+}
+```
+
+```rust
+// src/instructions/deposit/accounts.rs
+use anchor_lang::prelude::*;
+use arcium_anchor::prelude::*;
+use crate::{SignerAccount, ID};
+use crate::ID_CONST;  // From declare_id!, NOT from arcium_client
+
+#[queue_computation_accounts("compute_confidential_deposit", payer)]
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        init_if_needed,
+        space = 9,
+        payer = payer,
+        seeds = [&SIGN_PDA_SEED],
+        bump,
+    )]
+    pub sign_pda_account: Account<'info, SignerAccount>,
+    
+    #[account(address = derive_comp_def_pda!(crate::COMP_DEF_OFFSET_COMPUTE_DEPOSIT))]
+    pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    // ...
+}
+```
+
+---
+
+### MxeKeysNotSet Error
+
+**Symptom:** `MxeKeysNotSet` error when calling `queue_computation`
+
+**Cause:** This is an **Arcium devnet infrastructure issue**, not your code.
+
+> "The MXE keys are not set, i.e. not all the nodes of the MXE cluster agreed on the MXE keys."
+
+**Solutions:**
+1. Wait for MXE cluster to be ready (nodes need to complete key exchange)
+2. Try a different cluster offset
+3. Contact Arcium support about devnet cluster availability
+

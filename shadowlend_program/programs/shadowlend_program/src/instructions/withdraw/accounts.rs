@@ -3,7 +3,8 @@ use arcium_anchor::prelude::*;
 
 use crate::state::{Pool, UserObligation};
 use crate::{SignerAccount, ID};
-use arcium_client::idl::arcium::ID_CONST;
+use crate::ID_CONST;
+
 
 use crate::error::ErrorCode;
 
@@ -39,7 +40,6 @@ pub struct Withdraw<'info> {
         payer = payer,
         seeds = [&SIGN_PDA_SEED],
         bump,
-        address = derive_sign_pda!(),
     )]
     pub sign_pda_account: Account<'info, SignerAccount>,
 
@@ -69,6 +69,13 @@ pub struct Withdraw<'info> {
 
     #[account(address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
     pub clock_account: Box<Account<'info, ClockAccount>>,
+
+    // === Pyth Oracle Accounts ===
+    /// CHECK: Pyth SOL/USD price update account - validated in handler
+    pub sol_price_update: UncheckedAccount<'info>,
+
+    /// CHECK: Pyth USDC/USD price update account - validated in handler
+    pub usdc_price_update: UncheckedAccount<'info>,
 
     // === Programs ===
     pub system_program: Program<'info, System>,

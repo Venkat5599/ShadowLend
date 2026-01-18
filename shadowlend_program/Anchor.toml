@@ -9,20 +9,20 @@ skip-lint = false
 shadowlend_program = "J6hwZmTBYjDQdVdbeX7vuhpwpqgrhHUqQaUk8qYsZvXK"
 
 [programs.localnet]
-shadowlend_program = "AQMgx9c9vL1SCnZE7E4r4HRFZpHZDUcZJfdKt5YULRjD"
+shadowlend_program = "J6hwZmTBYjDQdVdbeX7vuhpwpqgrhHUqQaUk8qYsZvXK"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "https://api.devnet.solana.com"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/**/*.ts\""
 
 [test]
-startup_wait = 30000
+startup_wait = 60000
 shutdown_wait = 2000
 upgradeable = false
 
@@ -35,7 +35,7 @@ address = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95"
 program = "artifacts/lighthouse.so"
 
 [test.validator]
-bind_address = "0.0.0.0"
-url = "http://0.0.0.0:8899"
+bind_address = "127.0.0.1"
+url = "http://127.0.0.1:8899"
 ledger = ".anchor/test-ledger"
 rpc_port = 8899
