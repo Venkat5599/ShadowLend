@@ -2,7 +2,7 @@
  * ShadowLend Configuration
  * 
  * Central configuration for program IDs, network settings, and constants.
- * Compatible with Arcium SDK v0.5.4 and Anchor v0.32.x
+ * Compatible with Arcium SDK v0.6.2 and Anchor v0.32.x
  */
 
 import { PublicKey } from "@solana/web3.js";
@@ -24,7 +24,7 @@ export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 // Arcium Configuration
 // ============================================================
 
-export const ARCIUM_CLUSTER_OFFSET = 123; // Devnet cluster offset
+export const ARCIUM_CLUSTER_OFFSET = 456; // Devnet cluster offset
 
 // Computation definition names (must match lib.rs)
 export const COMP_DEF_NAMES = {
@@ -46,7 +46,7 @@ export const PDA_SEEDS = {
   obligation: Buffer.from("obligation"),
   collateral: Buffer.from("collateral"),
   borrow: Buffer.from("borrow"),
-  signerAccount: Buffer.from("SignerAccount"),
+  signerAccount: Buffer.from("ArciumSignerAccount"),
 } as const;
 
 // ============================================================
