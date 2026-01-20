@@ -1,25 +1,6 @@
 #!/usr/bin/env ts-node
 /**
  * ShadowLend Devnet Deployment Script
- * 
- * Master script that orchestrates full protocol deployment:
- * 1. Initializes Arcium computation definitions
- * 2. Uses real devnet tokens (wSOL + USDC)
- * 3. Initializes lending pool with vaults
- * 
- * Compatible with:
- * - Arcium SDK v0.6.2
- * - Anchor v0.32.x
- * - @solana/web3.js v1.x
- * 
- * Usage:
- *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
- *   ANCHOR_WALLET=~/.config/solana/id.json \
- *   npx ts-node scripts/deploy.ts
- * 
- * Options:
- *   --skip-comp-defs   Skip computation definition initialization
- *   --skip-pool        Skip pool initialization
  */
 
 import * as anchor from "@coral-xyz/anchor";
@@ -27,6 +8,7 @@ import { Program } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as path from "path";
+import chalk from "chalk";
 
 import {
   // Config
@@ -35,12 +17,17 @@ import {
   USDC_MINT,
   DEFAULT_POOL_CONFIG,
   COMP_DEF_NAMES,
+  ARCIUM_CLUSTER_OFFSET,
   // PDA utilities
   deriveAllPoolPdas,
   // Arcium utilities
   initializeArciumEnv,
   getCompDefPda,
   getMXEAccAddress,
+  getArciumProgramId,
+  getClusterAccAddress,
+  getMempoolAccAddress,
+  getExecutingPoolAccAddress,
   buildFinalizeCompDefTransaction,
   // Common utilities
   setupProvider,
@@ -49,10 +36,18 @@ import {
   checkBalance,
   detectNetwork,
   saveDeployment,
-  printHeader,
-  printSeparator,
   isAlreadyInitializedError,
   formatSignature,
+  // Logging
+  logHeader,
+  logSection,
+  logEntry,
+  logSuccess,
+  logError,
+  logWarning,
+  logInfo,
+  logDivider,
+  icons
 } from "./lib";
 
 // ============================================================
@@ -70,7 +65,7 @@ const COMP_DEFS: CompDefConfig[] = [
   { name: "Borrow", method: "initComputeBorrowCompDef", arciumKey: "borrow" },
   { name: "Withdraw", method: "initComputeWithdrawCompDef", arciumKey: "withdraw" },
   { name: "Repay", method: "initComputeRepayCompDef", arciumKey: "repay" },
-  // { name: "Liquidate", method: "initComputeLiquidateCompDef", arciumKey: "liquidate" },
+  { name: "Liquidate", method: "initComputeLiquidateCompDef", arciumKey: "liquidate" },
   { name: "Interest", method: "initComputeInterestCompDef", arciumKey: "interest" },
 ];
 
@@ -82,61 +77,105 @@ async function initializeCompDefs(
   payer: anchor.Wallet,
   provider: anchor.AnchorProvider
 ): Promise<void> {
-  printSeparator("Initializing Arcium Computation Definitions");
+  logSection("Initializing Arcium Computation Definitions");
 
   // Initialize Arcium environment
   initializeArciumEnv();
 
-  for (const compDef of COMP_DEFS) {
+
+  const DEPOSIT_ONLY = COMP_DEFS.filter(d => d.name === "Deposit");
+
+  for (const compDef of DEPOSIT_ONLY) {
     try {
-      console.log(`   • ${compDef.name}...`);
+      console.log(chalk.gray(`   ${icons.dot} ${compDef.name}...`));
 
       const compDefPda = getCompDefPda(program.programId, compDef.arciumKey);
-      const mxeAccount = getMXEAccAddress(program.programId);
+      console.log(chalk.gray(`     PDA: ${compDefPda.toBase58()}`));
+      const mxeAccount = getMXEAccAddress(program.programId); 
+      
+      const clusterAccount = getClusterAccAddress(ARCIUM_CLUSTER_OFFSET);
+      const mempoolAccount = getMempoolAccAddress(ARCIUM_CLUSTER_OFFSET);
+      const executingPool = getExecutingPoolAccAddress(ARCIUM_CLUSTER_OFFSET);
+      const arciumProgramId = getArciumProgramId();
+      console.log(chalk.gray(`     Arcium Program ID: ${arciumProgramId.toBase58()}`));
 
-      // Check if already initialized
+      let isInitialized = false;
+
+      // Check if already initialized AND owned by Arcium
       const accountInfo = await provider.connection.getAccountInfo(compDefPda);
       if (accountInfo) {
-        console.log(`     ⏭️  Already initialized`);
-        continue;
+        console.log(chalk.gray(`     Current Owner: ${accountInfo.owner.toBase58()}`));
+        if (accountInfo.owner.equals(arciumProgramId)) {
+           console.log(chalk.yellow(`     ${icons.warning} Already initialized (Account exists)`));
+           isInitialized = true;
+        } else {
+           console.log(chalk.yellow(`     ${icons.warning} Account exists but not owned by Arcium. Re-initializing...`));
+        }
       }
 
-      // Initialize computation definition
-      const tx = await (program.methods as any)[compDef.method]()
-        .accounts({
-          payer: payer.publicKey,
-          systemProgram: SystemProgram.programId,
-          compDefAccount: compDefPda,
-          mxeAccount: mxeAccount,
-        })
-        .rpc();
+      // Initialize computation definition if needed
+      if (!isInitialized) {
+        const tx = await (program.methods as any)[compDef.method]()
+          .accounts({
+            payer: payer.publicKey,
+            systemProgram: SystemProgram.programId,
+            compDefAccount: compDefPda,
+            mxeAccount: mxeAccount,
+            // Arcium required accounts for context
+            clusterAccount,
+            mempoolAccount,
+            executingPool,
+          })
+          .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
+          .rpc();
 
-      console.log(`     ✅ Initialized (tx: ${formatSignature(tx)})`);
+        console.log(chalk.green(`     ${icons.checkmark} Initialized (tx: ${formatSignature(tx)})`));
+      }
 
-      // Finalize the definition
-      console.log(`     Finalizing...`);
-      const finalizeTx = await buildFinalizeCompDefTransaction(
-        provider,
-        compDef.arciumKey,
-        program.programId
-      );
+      // Finalize the definition (always try to finalize to ensure it's completed)
+      console.log(chalk.gray(`     Finalizing...`));
+      try {
+        const finalizeTx = await buildFinalizeCompDefTransaction(
+          provider,
+          compDef.arciumKey,
+          program.programId
+        );
+        
+        // Debug: Log keys
+        if (finalizeTx.instructions.length > 0) {
+            console.log("     Finalize TX Keys:");
+            finalizeTx.instructions[0].keys.forEach(k => {
+                if (k.pubkey.toBase58() === compDefPda.toBase58()) {
+                    console.log(chalk.green(`       - ${k.pubkey.toBase58()} (MATCHES PDA)`));
+                } else {
+                    console.log(`       - ${k.pubkey.toBase58()}`);
+                }
+            });
+        }
 
-      const latestBlockhash = await provider.connection.getLatestBlockhash();
-      finalizeTx.recentBlockhash = latestBlockhash.blockhash;
-      finalizeTx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
-      finalizeTx.sign(payer.payer);
+        const latestBlockhash = await provider.connection.getLatestBlockhash();
+        finalizeTx.recentBlockhash = latestBlockhash.blockhash;
+        finalizeTx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
+        finalizeTx.sign(payer.payer);
 
-      const finSig = await provider.sendAndConfirm(finalizeTx, [payer.payer]);
-      console.log(`     ✅ Finalized (tx: ${formatSignature(finSig)})`);
+        const finSig = await provider.sendAndConfirm(finalizeTx, [payer.payer]);
+        console.log(chalk.greenBright(`     ${icons.checkmark} Finalized (tx: ${formatSignature(finSig)})`));
+      } catch (finalizeError: any) {
+        // If it's already finalized or other non-critical error, we might want to warn but continue
+        // Arcium doesn't have a specific "AlreadyFinalized" error code easily accessible here usually, 
+        // but we can check the error message or just log it as a warning.
+        console.log(chalk.yellow(`     ${icons.info} Finalization skipped or failed: ${finalizeError.message}`));
+      }
 
     } catch (error: any) {
       if (isAlreadyInitializedError(error)) {
-        console.log(`     ⏭️  Already initialized`);
+        console.log(chalk.yellow(`     ${icons.warning} Already initialized`));
       } else {
-        console.error(`     ❌ Failed:`, error.message);
+        logError(`Failed: ${error.message}`);
         throw error;
       }
     }
+    console.log(); // spacer
   }
 }
 
@@ -149,18 +188,16 @@ async function initializePool(
   collateralMint: PublicKey,
   borrowMint: PublicKey
 ): Promise<PublicKey> {
-  printSeparator("Initializing Lending Pool");
+  logSection("Initializing Lending Pool");
 
   const pdas = deriveAllPoolPdas(collateralMint, borrowMint);
   const config = DEFAULT_POOL_CONFIG;
 
-  console.log(`   • Pool PDA:         ${pdas.pool.toBase58()}`);
-  console.log(`   • Collateral Vault: ${pdas.collateralVault.toBase58()}`);
-  console.log(`   • Borrow Vault:     ${pdas.borrowVault.toBase58()}`);
-  console.log(`   • LTV:              ${config.ltv / 100}%`);
-  console.log(`   • Liq. Threshold:   ${config.liquidationThreshold / 100}%`);
-  console.log(`   • Liq. Bonus:       ${config.liquidationBonus / 100}%`);
-  console.log(`   • Borrow Rate:      ${config.fixedBorrowRate / 100}% APY`);
+  logEntry("Pool PDA", pdas.pool.toBase58());
+  logEntry("Collateral Vault", pdas.collateralVault.toBase58());
+  logEntry("Borrow Vault", pdas.borrowVault.toBase58());
+  logEntry("LTV", `${config.ltv / 100}%`);
+  logEntry("Borrow Rate", `${config.fixedBorrowRate / 100}% APY`);
 
   try {
     const tx = await program.methods
@@ -182,14 +219,16 @@ async function initializePool(
       })
       .rpc({ commitment: "confirmed" });
 
-    console.log(`   ✅ Pool initialized (tx: ${formatSignature(tx)})`);
+    logSuccess(`Pool initialized (tx: ${formatSignature(tx)})`);
     return pdas.pool;
 
   } catch (error: any) {
     if (isAlreadyInitializedError(error)) {
-      console.log(`   ⏭️  Pool already exists`);
+      logWarning("Pool already exists");
       return pdas.pool;
     }
+    logError("Initialization Failed");
+    console.error(error);
     throw error;
   }
 }
@@ -199,7 +238,7 @@ async function initializePool(
 // ============================================================
 
 async function main() {
-  printHeader("ShadowLend Devnet Deployment");
+  logHeader("ShadowLend Devnet Deployment");
 
   // Parse args
   const args = process.argv.slice(2);
@@ -210,47 +249,53 @@ async function main() {
   const provider = setupProvider();
   const connection = provider.connection;
 
+  logSection("Configuration");
+  
   // Detect network
   const network = await detectNetwork(connection);
-  console.log(`\n🌐 Network: ${network}`);
+  logEntry("Network", network, icons.info);
 
   // Load wallet
   const payer = loadDefaultWallet();
   const wallet = new anchor.Wallet(payer);
-  console.log(`👤 Admin:   ${payer.publicKey.toBase58()}`);
+  logEntry("Admin", payer.publicKey.toBase58(), icons.key);
 
   // Check balance
-  await checkBalance(connection, payer.publicKey, 0.5);
+  const balance = await checkBalance(connection, payer.publicKey, 0.5);
+  // logEntry("Balance", `${balance.toFixed(4)} SOL`);
 
   // Load program
   const basePath = path.join(__dirname, "..");
   const idl = loadIdl(basePath);
   const program = new Program(idl, provider);
-
-  console.log(`📋 Program: ${program.programId.toBase58()}`);
+  logEntry("Program", program.programId.toBase58(), icons.key);
+  logDivider();
 
   // Step 1: Initialize computation definitions
   if (!skipCompDefs) {
     await initializeCompDefs(program, wallet, provider);
   } else {
-    console.log("\n⏭️  Skipping computation definitions (--skip-comp-defs)");
+    logInfo("Skipping computation definitions (--skip-comp-defs)");
   }
+  logDivider();
 
   // Step 2: Initialize pool
   const collateralMint = WSOL_MINT;
   const borrowMint = USDC_MINT;
 
-  console.log(`\n🪙  Token Configuration:`);
-  console.log(`   • Collateral (wSOL): ${collateralMint.toBase58()}`);
-  console.log(`   • Borrow (USDC):     ${borrowMint.toBase58()}`);
+  logSection("Token Configuration");
+  logEntry("Collateral (wSOL)", collateralMint.toBase58());
+  logEntry("Borrow (USDC)", borrowMint.toBase58());
+  logDivider();
 
   let poolPda: PublicKey;
   if (!skipPool) {
     poolPda = await initializePool(program, wallet, collateralMint, borrowMint);
   } else {
-    console.log("\n⏭️  Skipping pool initialization (--skip-pool)");
+    logInfo("Skipping pool initialization (--skip-pool)");
     poolPda = deriveAllPoolPdas(collateralMint, borrowMint).pool;
   }
+  logDivider();
 
   // Derive all PDAs for summary
   const pdas = deriveAllPoolPdas(collateralMint, borrowMint);
@@ -271,20 +316,21 @@ async function main() {
   saveDeployment(basePath, deploymentInfo);
 
   // Summary
-  printHeader("DEPLOYMENT COMPLETE");
-  console.log(`Program ID:       ${PROGRAM_ID.toBase58()}`);
-  console.log(`Pool PDA:         ${poolPda.toBase58()}`);
-  console.log(`Collateral Mint:  ${collateralMint.toBase58()}`);
-  console.log(`Borrow Mint:      ${borrowMint.toBase58()}`);
-  console.log(`Collateral Vault: ${pdas.collateralVault.toBase58()}`);
-  console.log(`Borrow Vault:     ${pdas.borrowVault.toBase58()}`);
-  console.log(`Admin:            ${payer.publicKey.toBase58()}`);
-  console.log("═".repeat(60));
-  console.log("\n✅ ShadowLend is ready on devnet!");
-  console.log("\n💡 Note: Borrow vault requires manual USDC funding for lending.");
+  logHeader("DEPLOYMENT COMPLETE");
+  logEntry("Program ID", PROGRAM_ID.toBase58());
+  logEntry("Pool PDA", poolPda.toBase58());
+  logEntry("Collateral Mint", collateralMint.toBase58());
+  logEntry("Borrow Mint", borrowMint.toBase58());
+  logEntry("Collateral Vault", pdas.collateralVault.toBase58());
+  logEntry("Borrow Vault", pdas.borrowVault.toBase58());
+  logEntry("Admin", payer.publicKey.toBase58());
+  
+  logSuccess("ShadowLend is ready on devnet!");
+  logInfo("Note: Borrow vault requires manual USDC funding for lending.");
+  logDivider();
 }
 
 main().catch((err) => {
-  console.error("\n❌ Deployment failed:", err);
+  logError(`Deployment failed: ${err.message}`);
   process.exit(1);
 });

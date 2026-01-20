@@ -4,6 +4,7 @@ use arcium_anchor::prelude::*;
 use super::accounts::UpdateInterest;
 use super::callback::ComputeConfidentialInterestCallback;
 use crate::error::ErrorCode;
+use crate::state::{Pool, UserObligation};
 
 /// Handles interest accrual by queuing MXE computation.
 ///
@@ -18,34 +19,64 @@ use crate::error::ErrorCode;
 ///
 /// # Arguments
 /// * `computation_offset` - Unique offset for this MXE computation
+/// * `user_pubkey` - Target user's x25519 public key for encrypting output
+/// * `user_nonce` - Encryption nonce for user state (Enc<Shared, UserState>)
+/// * `mxe_nonce` - Encryption nonce for pool state (Enc<Mxe, PoolState>)
 pub fn update_interest_handler(
     ctx: Context<UpdateInterest>,
     computation_offset: u64,
+    user_pubkey: [u8; 32],
+    user_nonce: u128,
+    mxe_nonce: u128,
 ) -> Result<()> {
     // User must have existing state
     let user_obligation = &ctx.accounts.user_obligation;
     require!(
-        !user_obligation.encrypted_state_blob.is_empty(),
+        user_obligation.user_state_initialized,
         ErrorCode::InvalidBorrowAmount
     );
 
     // Set the bump for the sign_pda_account
     ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
 
-    // Read encrypted state from on-chain UserObligation
-    let mut encrypted_state = [0u8; 64];
-    let len = user_obligation.encrypted_state_blob.len().min(64);
-    encrypted_state[..len].copy_from_slice(&user_obligation.encrypted_state_blob[..len]);
+    let pool = &ctx.accounts.pool;
 
     // Get current timestamp and borrow rate
     let current_ts = Clock::get()?.unix_timestamp;
-    let borrow_rate_bps = ctx.accounts.pool.fixed_borrow_rate;
+    let borrow_rate_bps = pool.fixed_borrow_rate;
 
     // Build arguments for Arcium MXE computation
-    let args = ArgBuilder::new()
-        .encrypted_u128(encrypted_state[0..32].try_into().unwrap())
-        .encrypted_u128(encrypted_state[32..64].try_into().unwrap())
-        .plaintext_i64(current_ts)
+    let mut args = ArgBuilder::new()
+        .x25519_pubkey(user_pubkey)
+        .plaintext_u128(user_nonce);
+
+    // User state - always initialized for interest update (checked above)
+    // Pass by reference using account(key, offset, length)
+    args = args.account(
+        user_obligation.key(),
+        UserObligation::ENCRYPTED_STATE_OFFSET as u32,
+        UserObligation::ENCRYPTED_STATE_SIZE as u32,
+    );
+
+    // Enc<Mxe, PoolState> - MXE-only encryption with mxe_nonce
+    args = args.plaintext_u128(mxe_nonce);
+
+    // Pool state - check if initialized
+    args = if pool.pool_state_initialized {
+        args.account(
+            pool.key(),
+            Pool::ENCRYPTED_STATE_OFFSET as u32,
+            Pool::ENCRYPTED_STATE_SIZE as u32,
+        )
+    } else {
+        args.encrypted_u128([0u8; 32])
+            .encrypted_u128([0u8; 32])
+            .encrypted_u128([0u8; 32])
+            .encrypted_u128([0u8; 32])
+    };
+
+    let args = args
+        .plaintext_u128(current_ts as u128)
         .plaintext_u64(borrow_rate_bps)
         .build();
 
