@@ -1,58 +1,31 @@
 use anchor_lang::prelude::*;
 
-/// Custom error codes for ShadowLend protocol
-/// Named `ErrorCode` to match Arcium's expected pattern for PDA macros
 #[error_code]
 pub enum ErrorCode {
-    // === Arcium Computation Errors ===
-    #[msg("The MXE computation was aborted")]
+    #[msg("Invalid amount - must be greater than zero")]
+    InvalidAmount,
+
+    #[msg("Computation aborted - MPC verification failed")]
     AbortedComputation,
 
-    #[msg("Arcium cluster not set on MXE account")]
-    ClusterNotSet,
-
-    // === Deposit Errors ===
-    #[msg("Deposit amount must be greater than zero")]
-    InvalidDepositAmount,
-
-    // === Borrow Errors ===
-    #[msg("Borrow request rejected - insufficient collateral")]
-    BorrowRejected,
-
-    #[msg("Borrow amount must be greater than zero")]
-    InvalidBorrowAmount,
-
-    // === Withdraw Errors ===
-    #[msg("Withdrawal would cause undercollateralization")]
-    WithdrawRejected,
-
-    #[msg("Withdraw amount must be greater than zero")]
-    InvalidWithdrawAmount,
-
-    // === Liquidation Errors ===
-    #[msg("Position is healthy and cannot be liquidated")]
-    PositionHealthy,
-
-    // === Pool Errors ===
-    #[msg("Insufficient liquidity in borrow pool")]
+    #[msg("Insufficient liquidity in pool")]
     InsufficientLiquidity,
 
-    // === General Errors ===
-    #[msg("Unauthorized - only pool authority can perform this action")]
-    Unauthorized,
+    #[msg("Borrow not approved - health factor too low")]
+    BorrowNotApproved,
 
-    #[msg("Invalid pool configuration")]
-    InvalidPoolConfig,
+    #[msg("Withdrawal not approved - would violate health factor")]
+    WithdrawNotApproved,
 
-    #[msg("Invalid mint - does not match pool collateral")]
+    #[msg("Math overflow")]
+    MathOverflow,
+
+    #[msg("Cluster not set")]
+    ClusterNotSet,
+
+    #[msg("Invalid Token Mint")]
     InvalidMint,
 
-    #[msg("Repay amount must be greater than zero")]
-    InvalidRepayAmount,
-
-    #[msg("Invalid computation output from MXE")]
-    InvalidComputationOutput,
-
-    #[msg("Math overflow detected")]
-    MathOverflow,
+    #[msg("Unauthorized")]
+    Unauthorized,
 }

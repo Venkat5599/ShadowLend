@@ -1,11 +1,7 @@
-// Admin instructions module
-//
-// Contains administrative operations for protocol setup:
-// - Pool initialization
-// - Arcium computation definition registration
+pub mod close_pool;
+pub mod init_comp_def;
+pub mod initialize_pool;
 
-mod init_comp_defs;
-mod initialize_pool;
-
-pub use init_comp_defs::*;
+pub use close_pool::*;
+pub use init_comp_def::*;
 pub use initialize_pool::*;
