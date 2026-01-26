@@ -131,35 +131,57 @@ async function initializeComputationDefinitions() {
         // --- Upload and Finalize Circuit ---
         // This ensures the circuit code is available on the Arcium network
         
-        logInfo(`Uploading and finalizing circuit for ${circuitName}...`);
+        // --- Upload and Finalize Circuit ---
+
+        /*
+        // THIS BLOCK IS FOR ON-CHAIN CIRCUITS AND HAS BEEN DISABLED.
+        // Since we are using off-chain circuits (e.g., from Supabase), we do not need
+        // to upload the circuit data to the blockchain. The circuit source URL is
+        // already set in the `init...CompDef` instruction.
 
         const buildDir = path.join(__dirname, "../../build");
         const arcisPath = path.join(buildDir, `${circuitName}.arcis`);
 
         if (!fs.existsSync(arcisPath)) {
-            throw new Error(`Compiled circuit file not found for ${circuitName}. Ensure 'build/${circuitName}.arcis' exists.`);
+            throw new Error(`Compiled circuit file not found for ${circuitName}.`);
         }
 
         const circuitData = fs.readFileSync(arcisPath);
+        const fileSize = circuitData.length;
+        logInfo(`Circuit file size: ${(fileSize / 1024).toFixed(2)} KB`);
 
-        // Upload circuit
-        // Note: uploadCircuit handles checking if it's already uploaded for this nonce/offset
-        try {
-          await uploadCircuit(
-              provider,
-              circuitName,
-              programId, // Use ShadowLend Program ID as the MXE User/Requester context
-              circuitData,
-              true // logging
-          );
-          logSuccess(`Circuit uploaded.`);
-        } catch (e: any) {
-             if (e.message && e.message.includes("already")) {
-                 logInfo("Circuit upload skipped (already uploaded).");
-             } else {
-                 logWarning(`Upload step message: ${e.message}`);
-             }
+        // OPTIMIZATION: If using a custom logic to verify on-chain size, we would do it here.
+        // For now, we rely on the SDK's idempotency. 
+        // If FORCE_REUPLOAD is set, we will try to upload regardless.
+        
+        let shouldUpload = true;
+        if (process.env.SKIP_UPLOAD === "true") shouldUpload = false;
+
+        if (shouldUpload) {
+            logInfo(`Uploading circuit for ${circuitName}...`);
+            try {
+              // The SDK handles chunking. 
+              // To speed this up, ensure your RPC supports high burst rates or increase delay if hitting 429s.
+              await uploadCircuit(
+                  provider,
+                  circuitName,
+                  programId, 
+                  circuitData,
+                  true 
+              );
+              logSuccess(`Circuit uploaded.`);
+            } catch (e: any) {
+                 if (e.message && e.message.includes("already")) {
+                     logInfo("Circuit upload skipped (SDK reported already uploaded).");
+                     
+                     // If user wants to FORCE, we can't force the SDK easily without nuking the offset.
+                     // But we can warn.
+                 } else {
+                     logWarning(`Upload step message: ${e.message}`);
+                 }
+            }
         }
+        */
 
         // Finalize computation definition
         // This marks the definition as ready for use
@@ -194,6 +216,12 @@ async function initializeComputationDefinitions() {
       } catch (error: any) {
         logError(`   Failed to process ${circuitName}`, error);
         // Continue with other circuits but log error
+      }
+      
+      // Delay to avoid rate limits (429)
+      if (config.name === "devnet") {
+          logInfo("Waiting 5s to respect rate limits...");
+          await new Promise(r => setTimeout(r, 5000));
       }
     }
 
