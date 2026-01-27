@@ -18,11 +18,17 @@ pub struct Pool {
     /// Liquidation threshold in basis points (8500 = 85%)
     pub liquidation_threshold: u16,
 
+    /// Total deposits in the pool (tracked for utilization)
+    pub total_deposits: u64,
+
+    /// Total borrows from the pool
+    pub total_borrows: u64,
+
     /// PDA bump seed
     pub bump: u8,
 }
 
 impl Pool {
     /// Seed prefix for Pool PDA derivation
-    pub const SEED_PREFIX: &'static [u8] = b"pool";
+    pub const SEED_PREFIX: &'static [u8] = b"pool_v2";
 }

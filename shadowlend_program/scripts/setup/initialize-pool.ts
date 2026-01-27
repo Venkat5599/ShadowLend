@@ -54,7 +54,7 @@ async function initializePool() {
 
     // Derive pool PDA
     const [poolPda, poolBump] = PublicKey.findProgramAddressSync(
-      [Buffer.from("pool")],
+      [Buffer.from("pool_v2")],
       programId
     );
 
@@ -135,6 +135,18 @@ async function initializePool() {
         [Buffer.from("borrow_vault"), poolPda.toBuffer()],
         programId
       );
+
+      // Check for orphaned vaults (Partial state)
+      const cVaultInfo = await provider.connection.getAccountInfo(collateralVault);
+      const bVaultInfo = await provider.connection.getAccountInfo(borrowVault);
+
+      if (cVaultInfo || bVaultInfo) {
+          logError("Cannot initialize pool: Vault accounts already exist!");
+          logEntry("Collateral Vault", cVaultInfo ? "Exists" : "Missing", cVaultInfo ? icons.warning : icons.cross);
+          logEntry("Borrow Vault", bVaultInfo ? "Exists" : "Missing", bVaultInfo ? icons.warning : icons.cross);
+          logInfo("Tip: Expected Pool PDA was missing, but Vaults were found. This implies a previous 'ClosePool' did not close vaults.");
+          throw new Error("State Mismatch: Vaults match Pool Seeds but Pool is missing.");
+      }
 
       logEntry("Collateral Vault", collateralVault.toBase58(), icons.link);
       logEntry("Borrow Vault", borrowVault.toBase58(), icons.link);

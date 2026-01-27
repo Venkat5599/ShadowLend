@@ -5,14 +5,14 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Token, TokenAccount};
 use arcium_anchor::prelude::*;
 
-use crate::{COMP_DEF_OFFSET_WITHDRAW, ID, ID_CONST};
+use crate::{COMP_DEF_OFFSET_LIQUIDATE, ID, ID_CONST};
 
-#[callback_accounts("withdraw")]
+#[callback_accounts("liquidate")]
 #[derive(Accounts)]
-pub struct WithdrawCallback<'info> {
+pub struct LiquidateCallback<'info> {
     pub arcium_program: Program<'info, Arcium>,
     #[account(
-        address = derive_comp_def_pda!(COMP_DEF_OFFSET_WITHDRAW)
+        address = derive_comp_def_pda!(COMP_DEF_OFFSET_LIQUIDATE)
     )]
     pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
     #[account(
@@ -45,9 +45,22 @@ pub struct WithdrawCallback<'info> {
 
     #[account(
         mut,
-        constraint = user_token_account.mint == pool.collateral_mint @ ErrorCode::InvalidMint
+        constraint = liquidator_borrow_account.mint == pool.borrow_mint @ ErrorCode::InvalidMint
     )]
-    pub user_token_account: Box<Account<'info, TokenAccount>>,
+    pub liquidator_borrow_account: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        constraint = liquidator_collateral_account.mint == pool.collateral_mint @ ErrorCode::InvalidMint
+    )]
+    pub liquidator_collateral_account: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"borrow_vault", pool.key().as_ref()],
+        bump
+    )]
+    pub borrow_vault: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,

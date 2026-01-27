@@ -14,6 +14,7 @@ pub const COMP_DEF_OFFSET_DEPOSIT: u32 = comp_def_offset("deposit");
 pub const COMP_DEF_OFFSET_WITHDRAW: u32 = comp_def_offset("withdraw");
 pub const COMP_DEF_OFFSET_BORROW: u32 = comp_def_offset("borrow");
 pub const COMP_DEF_OFFSET_REPAY: u32 = comp_def_offset("repay");
+pub const COMP_DEF_OFFSET_LIQUIDATE: u32 = comp_def_offset("liquidate");
 
 declare_id!("FpHChpheLnvPS9Qd7DyXwSrvSc3KCELkx4BC5MTE8T7k");
 
@@ -217,6 +218,10 @@ pub mod shadowlend_program {
                 amount,
                 user_obligation.state_nonce
             );
+
+            // Update global borrows
+            let pool = &mut ctx.accounts.pool;
+            pool.total_borrows = pool.total_borrows.checked_add(amount).ok_or(ErrorCode::MathOverflow)?;
         } else {
             msg!("Borrow rejected by health check (approved=0)");
         }
@@ -305,6 +310,10 @@ pub mod shadowlend_program {
             )?;
 
             msg!("Withdraw approved, transferred {} tokens", amount);
+
+            // Update global deposit counter
+            let pool = &mut ctx.accounts.pool;
+            pool.total_deposits = pool.total_deposits.checked_sub(amount).unwrap_or(0);
         } else {
             msg!("Withdraw rejected by health check");
         }
@@ -361,6 +370,133 @@ pub mod shadowlend_program {
         Ok(())
     }
 
+    /// Initiates a confidential liquidation.
+    ///
+    /// Liquidator transfers repayment tokens to escrow. 
+    /// MPC verifies if user is unhealthy. If so, seizes collateral.
+    /// If healthy, refund.
+    pub fn liquidate(
+        ctx: Context<Liquidate>,
+        computation_offset: u64,
+        amount: u64,
+        user_pubkey: [u8; 32],
+        user_nonce: u128,
+    ) -> Result<()> {
+        crate::instructions::liquidate_handler(
+            ctx,
+            computation_offset,
+            amount,
+            user_pubkey,
+            user_nonce,
+        )
+    }
+
+    /// Callback for liquidation.
+    #[arcium_callback(encrypted_ix = "liquidate")]
+    pub fn liquidate_callback(
+        ctx: Context<LiquidateCallback>,
+        output: SignedComputationOutputs<LiquidateOutput>,
+    ) -> Result<()> {
+        msg!("Liquidate callback START");
+        
+        let result = match output.verify_output(
+            &ctx.accounts.cluster_account,
+            &ctx.accounts.computation_account,
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                msg!("Liquidate verification failed: {}", e);
+                return Err(ErrorCode::AbortedComputation.into());
+            }
+        };
+
+        let inner = result.field_0;
+        
+        // Encrypted outputs are wrapped in structs with 'ciphertexts' field
+        let enc_deposit = inner.field_0.ciphertexts[0];
+        let enc_borrow = inner.field_1.ciphertexts[0];
+
+        let is_liquidatable = inner.field_2; // 1 or 0
+        let seized_collateral = inner.field_3;
+        let repaid_amount = inner.field_4; // Echoed back amount
+
+        let user_obligation = &mut ctx.accounts.user_obligation;
+        
+        // Always update state (nonce, encrypted balances)
+        // If query failed (healthy), circuit should output OLD balances (or unchanged).
+        // If succeeded, NEW balances.
+        user_obligation.encrypted_deposit = enc_deposit;
+        user_obligation.encrypted_borrow = enc_borrow;
+        user_obligation.state_nonce += 1;
+
+        if is_liquidatable == 1 {
+            msg!("Liquidation SUCCESS. User was unhealthy.");
+            msg!("Seizing {} collateral to liquidator.", seized_collateral);
+
+            // Transfer Collateral -> Liquidator
+            let pool_key = ctx.accounts.pool.key();
+            let seeds: &[&[u8]] = &[
+                b"collateral_vault",
+                pool_key.as_ref(),
+                &[ctx.bumps.collateral_vault],
+            ];
+            let signer = &[&seeds[..]];
+
+            let transfer_cpi = Transfer {
+                from: ctx.accounts.collateral_vault.to_account_info(),
+                to: ctx.accounts.liquidator_collateral_account.to_account_info(),
+                authority: ctx.accounts.collateral_vault.to_account_info(),
+            };
+
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    transfer_cpi,
+                    signer,
+                ),
+                seized_collateral,
+            )?;
+            
+            // Update Global Stats
+            let pool = &mut ctx.accounts.pool;
+            // Debt decreased by repaid_amount
+            pool.total_borrows = pool.total_borrows.checked_sub(repaid_amount).unwrap_or(0);
+            // Collateral decreased by seized_collateral (removed from vault)
+            pool.total_deposits = pool.total_deposits.checked_sub(seized_collateral).unwrap_or(0);
+
+        } else {
+            msg!("Liquidation FAILED. User is healthy.");
+            msg!("Refunding {} tokens to liquidator.", repaid_amount);
+
+            // Refund Repayment: Borrow Vault -> Liquidator
+            // The liquidator sent tokens to BorrowVault in handler. Now we send them back.
+            let pool_key = ctx.accounts.pool.key();
+            let seeds: &[&[u8]] = &[
+                b"borrow_vault",
+                pool_key.as_ref(),
+                &[ctx.bumps.borrow_vault],
+            ];
+            let signer = &[&seeds[..]];
+
+            let transfer_cpi = Transfer {
+                from: ctx.accounts.borrow_vault.to_account_info(),
+                to: ctx.accounts.liquidator_borrow_account.to_account_info(),
+                authority: ctx.accounts.borrow_vault.to_account_info(),
+            };
+            
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    transfer_cpi,
+                    signer,
+                ),
+                repaid_amount,
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Initializes deposit computation definition
     pub fn init_deposit_comp_def(ctx: Context<InitDepositCompDef>) -> Result<()> {
         crate::instructions::admin::init_deposit_comp_def_handler(ctx)
@@ -379,6 +515,11 @@ pub mod shadowlend_program {
     /// Initializes repay computation definition
     pub fn init_repay_comp_def(ctx: Context<InitRepayCompDef>) -> Result<()> {
         crate::instructions::admin::init_repay_comp_def_handler(ctx)
+    }
+
+    /// Initializes liquidate computation definition
+    pub fn init_liquidate_comp_def(ctx: Context<InitLiquidateCompDef>) -> Result<()> {
+        crate::instructions::admin::init_liquidate_comp_def_handler(ctx)
     }
 
     /// Closes the lending pool (admin only)

@@ -5,19 +5,19 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 use arcium_anchor::prelude::*;
 
 use crate::error::ErrorCode;
-use crate::{ArciumSignerAccount, COMP_DEF_OFFSET_REPAY, ID, ID_CONST};
+use crate::{ArciumSignerAccount, COMP_DEF_OFFSET_LIQUIDATE, ID, ID_CONST};
 
-#[queue_computation_accounts("repay", payer)]
+#[queue_computation_accounts("liquidate", liquidator)]
 #[derive(Accounts)]
 #[instruction(computation_offset: u64, amount: u64, user_pubkey: [u8; 32], user_nonce: u128)]
-pub struct Repay<'info> {
+pub struct Liquidate<'info> {
     #[account(mut)]
-    pub payer: Signer<'info>,
+    pub liquidator: Signer<'info>,
 
     #[account(
         init_if_needed,
         space = 9,
-        payer = payer,
+        payer = liquidator,
         seeds = [b"ArciumSignerAccount"],
         bump,
     )]
@@ -45,7 +45,7 @@ pub struct Repay<'info> {
     /// CHECK: computation_account, checked by the arcium program.
     pub computation_account: UncheckedAccount<'info>,
     #[account(
-        address = derive_comp_def_pda!(COMP_DEF_OFFSET_REPAY)
+        address = derive_comp_def_pda!(COMP_DEF_OFFSET_LIQUIDATE)
     )]
     pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
     #[account(
@@ -65,15 +65,16 @@ pub struct Repay<'info> {
     pub clock_account: Box<Account<'info, ClockAccount>>,
 
     #[account(
-        mut,
         seeds = [Pool::SEED_PREFIX],
         bump = pool.bump
     )]
     pub pool: Box<Account<'info, Pool>>,
 
+    /// The user being liquidated
+    /// We don't need their signature, just their account
     #[account(
         mut,
-        seeds = [UserObligation::SEED_PREFIX, payer.key().as_ref(), pool.key().as_ref()],
+        seeds = [UserObligation::SEED_PREFIX, user_obligation.user.as_ref(), pool.key().as_ref()],
         bump = user_obligation.bump
     )]
     pub user_obligation: Box<Account<'info, UserObligation>>,
@@ -83,23 +84,43 @@ pub struct Repay<'info> {
     )]
     pub borrow_mint: Box<Account<'info, Mint>>,
 
-    /// Source of repayment tokens
+    #[account(
+        address = pool.collateral_mint
+    )]
+    pub collateral_mint: Box<Account<'info, Mint>>,
+
+    /// Liquidator's token account (repaying debt)
+    #[account(
+        mut,
+        associated_token::mint = borrow_mint,
+        associated_token::authority = liquidator,
+    )]
+    pub liquidator_borrow_account: Box<Account<'info, TokenAccount>>,
+
+    /// Liquidator's collateral account (receiving seized collateral)
     #[account(
         init_if_needed,
-        payer = payer,
-        associated_token::mint = borrow_mint,
-        associated_token::authority = payer,
-        constraint = user_token_account.mint == borrow_mint.key() @ ErrorCode::InvalidMint,
+        payer = liquidator,
+        associated_token::mint = collateral_mint,
+        associated_token::authority = liquidator,
     )]
-    pub user_token_account: Box<Account<'info, TokenAccount>>,
+    pub liquidator_collateral_account: Box<Account<'info, TokenAccount>>,
 
-    /// Pool's borrow vault (destination of repayment)
+    /// Pool's borrow vault (receiving repayment)
     #[account(
         mut,
         seeds = [b"borrow_vault", pool.key().as_ref()],
         bump
     )]
     pub borrow_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Pool's collateral vault (source of seized collateral)
+    #[account(
+        mut,
+        seeds = [b"collateral_vault", pool.key().as_ref()],
+        bump
+    )]
+    pub collateral_vault: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
