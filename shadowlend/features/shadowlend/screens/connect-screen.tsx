@@ -1,7 +1,8 @@
 import { View, Text, StyleSheet, Animated, Easing, Pressable } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme'
-import { Button, Icon, ShadowLendLogo } from '@/components/ui'
+import { LinearGradient } from 'expo-linear-gradient'
+import { colors, spacing, fontSize, borderRadius, fonts } from '@/constants/theme'
+import { Icon, ShadowLendLogo, AnimatedBackground } from '@/components/ui'
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useTheme } from '@/features/theme'
 import { useWallet } from '@/features/account/use-wallet'
@@ -13,7 +14,6 @@ export function ConnectScreen() {
   const router = useRouter()
   const [hasAttemptedConnect, setHasAttemptedConnect] = useState(false)
 
-  // Navigate to home only after user initiated connection succeeds
   useEffect(() => {
     if (hasAttemptedConnect && connected) {
       const timer = setTimeout(() => {
@@ -30,11 +30,12 @@ export function ConnectScreen() {
   
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current
-  const slideAnim = useRef(new Animated.Value(30)).current
-  const scaleAnim = useRef(new Animated.Value(0.9)).current
+  const slideAnim = useRef(new Animated.Value(40)).current
+  const scaleAnim = useRef(new Animated.Value(0.8)).current
   const feature1Anim = useRef(new Animated.Value(0)).current
   const feature2Anim = useRef(new Animated.Value(0)).current
   const feature3Anim = useRef(new Animated.Value(0)).current
+  const buttonAnim = useRef(new Animated.Value(0)).current
 
   useEffect(() => {
     // Staggered entrance animations
@@ -42,13 +43,13 @@ export function ConnectScreen() {
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
-          duration: 800,
+          duration: 1000,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
         Animated.timing(slideAnim, {
           toValue: 0,
-          duration: 800,
+          duration: 1000,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
@@ -59,131 +60,199 @@ export function ConnectScreen() {
           useNativeDriver: true,
         }),
       ]),
-      Animated.stagger(150, [
+      Animated.stagger(120, [
         Animated.spring(feature1Anim, { toValue: 1, friction: 8, useNativeDriver: true }),
         Animated.spring(feature2Anim, { toValue: 1, friction: 8, useNativeDriver: true }),
         Animated.spring(feature3Anim, { toValue: 1, friction: 8, useNativeDriver: true }),
       ]),
+      Animated.spring(buttonAnim, { toValue: 1, friction: 6, useNativeDriver: true }),
     ]).start()
   }, [])
 
   const getFeatureStyle = (anim: Animated.Value) => ({
     opacity: anim,
     transform: [
-      { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) },
-      { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1] }) },
+      { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [30, 0] }) },
+      { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] }) },
     ],
   })
 
   return (
-    <SafeAreaView style={[styles.container, isDark && styles.containerDark]}>
-      {/* Theme Toggle */}
-      <View style={styles.topBar}>
-        <View style={styles.spacer} />
-        <Pressable style={[styles.themeButton, isDark && styles.themeButtonDark]} onPress={toggleTheme}>
-          <Icon name={isDark ? 'light-mode' : 'dark-mode'} size={20} color={isDark ? colors.dark.text : colors.textPrimary} />
-        </Pressable>
-      </View>
+    <View style={styles.container}>
+      {/* Animated Background */}
+      <AnimatedBackground isDark={isDark} />
+      
+      {/* Background Gradient */}
+      <LinearGradient
+        colors={isDark 
+          ? ['#0a1929', '#132f4c', '#0d2137'] // Dark teal gradient
+          : ['#f0f4f8', '#e8eef5', '#f6f9fc']
+        }
+        style={styles.backgroundGradient}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+      />
 
-      <View style={styles.content}>
+      <SafeAreaView style={styles.safeArea}>
+        {/* Theme Toggle */}
+        <View style={styles.topBar}>
+          <View style={styles.spacer} />
+          <Pressable 
+            style={[styles.themeButton, isDark && styles.themeButtonDark]} 
+            onPress={toggleTheme}
+          >
+            <Icon 
+              name={isDark ? 'light-mode' : 'dark-mode'} 
+              size={20} 
+              color={isDark ? colors.dark.text : colors.textPrimary} 
+            />
+          </Pressable>
+        </View>
+
+        <View style={styles.content}>
+          {/* Logo - Clean, no glow */}
+          <Animated.View 
+            style={[
+              styles.logoContainer,
+              {
+                opacity: fadeAnim,
+                transform: [
+                  { translateY: slideAnim },
+                  { scale: scaleAnim },
+                ],
+              },
+            ]}
+          >
+            <ShadowLendLogo size={110} color={colors.primary} />
+          </Animated.View>
+
+          {/* Title & Description */}
+          <Animated.View 
+            style={[
+              styles.textContainer,
+              {
+                opacity: fadeAnim,
+                transform: [{ translateY: slideAnim }],
+              },
+            ]}
+          >
+            <Text style={[styles.title, isDark && styles.textDark]}>ShadowLend</Text>
+            <View style={styles.subtitleContainer}>
+              <View style={styles.subtitleLine} />
+              <Text style={styles.subtitle}>Private Lending on Solana</Text>
+              <View style={styles.subtitleLine} />
+            </View>
+            <Text style={[styles.description, isDark && styles.textSecondaryDark]}>
+              Access liquidity while keeping your financial data private using Arcium's confidential computing network.
+            </Text>
+          </Animated.View>
+
+          {/* Feature Cards */}
+          <View style={styles.features}>
+            <Animated.View style={[styles.featureItem, isDark && styles.featureItemDark, getFeatureStyle(feature1Anim)]}>
+              <View style={[styles.featureIcon, isDark && styles.featureIconDark]}>
+                <Icon name="visibility-off" size={22} color={colors.primary} />
+              </View>
+              <View style={styles.featureText}>
+                <Text style={[styles.featureTitle, isDark && styles.textDark]}>Private Positions</Text>
+                <Text style={[styles.featureDescription, isDark && styles.textSecondaryDark]}>Your balances stay hidden</Text>
+              </View>
+              <View style={styles.featureCheck}>
+                <Icon name="check-circle" size={20} color={colors.success} />
+              </View>
+            </Animated.View>
+
+            <Animated.View style={[styles.featureItem, isDark && styles.featureItemDark, getFeatureStyle(feature2Anim)]}>
+              <View style={[styles.featureIcon, isDark && styles.featureIconDark]}>
+                <Icon name="lock" size={22} color={colors.primary} />
+              </View>
+              <View style={styles.featureText}>
+                <Text style={[styles.featureTitle, isDark && styles.textDark]}>Secure Computation</Text>
+                <Text style={[styles.featureDescription, isDark && styles.textSecondaryDark]}>MXE-powered calculations</Text>
+              </View>
+              <View style={styles.featureCheck}>
+                <Icon name="check-circle" size={20} color={colors.success} />
+              </View>
+            </Animated.View>
+
+            <Animated.View style={[styles.featureItem, isDark && styles.featureItemDark, getFeatureStyle(feature3Anim)]}>
+              <View style={[styles.featureIcon, isDark && styles.featureIconDark]}>
+                <Icon name="verified" size={22} color={colors.primary} />
+              </View>
+              <View style={styles.featureText}>
+                <Text style={[styles.featureTitle, isDark && styles.textDark]}>Attestation Verified</Text>
+                <Text style={[styles.featureDescription, isDark && styles.textSecondaryDark]}>Trustless proof system</Text>
+              </View>
+              <View style={styles.featureCheck}>
+                <Icon name="check-circle" size={20} color={colors.success} />
+              </View>
+            </Animated.View>
+          </View>
+        </View>
+
+        {/* Footer */}
         <Animated.View 
           style={[
-            styles.logoContainer,
+            styles.footer, 
+            isDark && styles.footerDark,
             {
-              opacity: fadeAnim,
+              opacity: buttonAnim,
               transform: [
-                { translateY: slideAnim },
-                { scale: scaleAnim },
+                { translateY: buttonAnim.interpolate({ inputRange: [0, 1], outputRange: [50, 0] }) },
               ],
             },
           ]}
         >
-          <ShadowLendLogo size={100} color={colors.primary} />
+          <Pressable
+            style={[styles.connectButton, connecting && styles.connectButtonDisabled]}
+            onPress={handleConnect}
+            disabled={connecting}
+          >
+            <LinearGradient
+              colors={connecting 
+                ? ['#666', '#555'] 
+                : isDark 
+                  ? ['#00d4ff', '#00a8cc'] // Bright cyan gradient in dark mode
+                  : [colors.primary, '#1a5fd4']
+              }
+              style={styles.connectButtonGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            >
+              <Icon 
+                name="account-balance-wallet" 
+                size={22} 
+                color={colors.white} 
+              />
+              <Text style={styles.connectButtonText}>
+                {connecting ? "Connecting..." : "Connect Wallet"}
+              </Text>
+            </LinearGradient>
+          </Pressable>
+          
+          <View style={styles.poweredByContainer}>
+            <View style={styles.poweredByDot} />
+            <Text style={styles.footerText}>Powered by Arcium MXE Network</Text>
+          </View>
         </Animated.View>
-
-        <Animated.View 
-          style={[
-            styles.textContainer,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }],
-            },
-          ]}
-        >
-          <Text style={[styles.title, isDark && styles.textDark]}>ShadowLend</Text>
-          <Text style={styles.subtitle}>Private Lending on Solana</Text>
-          <Text style={[styles.description, isDark && styles.textSecondaryDark]}>
-            Access liquidity while keeping your financial data private using Arcium's confidential computing network.
-          </Text>
-        </Animated.View>
-
-        <View style={styles.features}>
-          <Animated.View style={[styles.featureItem, isDark && styles.featureItemDark, getFeatureStyle(feature1Anim)]}>
-            <View style={[styles.featureIcon, isDark && styles.featureIconDark]}>
-              <Icon name="visibility-off" size={22} color={colors.primary} />
-            </View>
-            <View style={styles.featureText}>
-              <Text style={[styles.featureTitle, isDark && styles.textDark]}>Private Positions</Text>
-              <Text style={[styles.featureDescription, isDark && styles.textSecondaryDark]}>Your balances stay hidden</Text>
-            </View>
-            <View style={styles.featureCheck}>
-              <Icon name="check-circle" size={20} color={colors.success} />
-            </View>
-          </Animated.View>
-
-          <Animated.View style={[styles.featureItem, isDark && styles.featureItemDark, getFeatureStyle(feature2Anim)]}>
-            <View style={[styles.featureIcon, isDark && styles.featureIconDark]}>
-              <Icon name="lock" size={22} color={colors.primary} />
-            </View>
-            <View style={styles.featureText}>
-              <Text style={[styles.featureTitle, isDark && styles.textDark]}>Secure Computation</Text>
-              <Text style={[styles.featureDescription, isDark && styles.textSecondaryDark]}>MXE-powered calculations</Text>
-            </View>
-            <View style={styles.featureCheck}>
-              <Icon name="check-circle" size={20} color={colors.success} />
-            </View>
-          </Animated.View>
-
-          <Animated.View style={[styles.featureItem, isDark && styles.featureItemDark, getFeatureStyle(feature3Anim)]}>
-            <View style={[styles.featureIcon, isDark && styles.featureIconDark]}>
-              <Icon name="verified" size={22} color={colors.primary} />
-            </View>
-            <View style={styles.featureText}>
-              <Text style={[styles.featureTitle, isDark && styles.textDark]}>Attestation Verified</Text>
-              <Text style={[styles.featureDescription, isDark && styles.textSecondaryDark]}>Trustless proof system</Text>
-            </View>
-            <View style={styles.featureCheck}>
-              <Icon name="check-circle" size={20} color={colors.success} />
-            </View>
-          </Animated.View>
-        </View>
-      </View>
-
-      <View style={[styles.footer, isDark && styles.footerDark]}>
-        <Button
-          title={connecting ? "Connecting..." : "Connect Wallet"}
-          icon="account-balance-wallet"
-          iconPosition="left"
-          size="lg"
-          fullWidth
-          onPress={handleConnect}
-          disabled={connecting}
-        />
-        <Text style={styles.footerText}>
-          Powered by Arcium MXE Network
-        </Text>
-      </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.backgroundLight,
   },
-  containerDark: {
-    backgroundColor: colors.dark.background,
+  backgroundGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  safeArea: {
+    flex: 1,
   },
   topBar: {
     flexDirection: 'row',
@@ -193,21 +262,23 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   spacer: {
-    width: 40,
+    width: 44,
   },
   themeButton: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: borderRadius.full,
-    backgroundColor: colors.white,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
+    shadowColor: colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
   },
   themeButtonDark: {
-    backgroundColor: colors.dark.card,
-    borderColor: colors.dark.border,
+    backgroundColor: 'rgba(30, 41, 59, 0.9)',
   },
   textDark: {
     color: colors.dark.text,
@@ -222,7 +293,7 @@ const styles = StyleSheet.create({
   },
   logoContainer: {
     alignItems: 'center',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
   },
   textContainer: {
     alignItems: 'center',
@@ -230,16 +301,27 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.textPrimary,
-    fontSize: 36,
-    fontWeight: fontWeight.bold,
-    marginBottom: spacing.xs,
-    letterSpacing: -0.5,
+    fontSize: 42,
+    fontFamily: fonts.bold,
+    marginBottom: spacing.sm,
+    letterSpacing: -1,
+  },
+  subtitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  subtitleLine: {
+    width: 24,
+    height: 2,
+    backgroundColor: colors.primary,
+    borderRadius: 1,
   },
   subtitle: {
     color: colors.primary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.semibold,
-    marginBottom: spacing.md,
+    fontFamily: fonts.semiBold,
   },
   description: {
     color: colors.textSecondary,
@@ -255,25 +337,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    backgroundColor: colors.white,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     padding: spacing.md,
-    paddingVertical: spacing.md + 2,
+    paddingVertical: spacing.md + 4,
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: 'rgba(0, 0, 0, 0.04)',
     shadowColor: colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   featureItemDark: {
-    backgroundColor: colors.dark.card,
-    borderColor: colors.dark.border,
+    backgroundColor: 'rgba(30, 41, 59, 0.9)',
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   featureIcon: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     borderRadius: borderRadius.lg,
     backgroundColor: colors.primaryLight,
     alignItems: 'center',
@@ -289,14 +371,14 @@ const styles = StyleSheet.create({
   featureTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   featureDescription: {
     color: colors.textSecondary,
     fontSize: fontSize.sm,
   },
   featureCheck: {
-    opacity: 0.8,
+    opacity: 0.9,
   },
   footer: {
     padding: spacing.lg,
@@ -304,7 +386,45 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   footerDark: {
-    backgroundColor: colors.dark.card,
+    // No background needed with gradient
+  },
+  connectButton: {
+    borderRadius: borderRadius.full, // Pill-shaped
+    overflow: 'hidden',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  connectButtonDisabled: {
+    shadowOpacity: 0.1,
+  },
+  connectButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.md + 4,
+    paddingHorizontal: spacing.xl,
+  },
+  connectButtonText: {
+    color: colors.white,
+    fontSize: fontSize.lg,
+    fontFamily: fonts.bold,
+    letterSpacing: 0.3,
+  },
+  poweredByContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  poweredByDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#00D4AA',
   },
   footerText: {
     color: '#00D4AA',
@@ -312,5 +432,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     letterSpacing: 1.5,
+    fontFamily: fonts.medium,
   },
 })

@@ -1,10 +1,9 @@
-import { View, Text, StyleSheet, Animated, Easing } from 'react-native'
+import { View, Text, StyleSheet, ScrollView } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme'
-import { Button, Icon, Card } from '@/components/ui'
+import { colors, spacing, fontSize, borderRadius, fonts } from '@/constants/theme'
+import { Button, Icon, Card, SuccessCelebration, AnimatedBackground } from '@/components/ui'
 import { useRouter, useLocalSearchParams } from 'expo-router'
 import { useTheme } from '@/features/theme'
-import { useEffect, useRef } from 'react'
 
 export function GrowSuccessScreen() {
   const router = useRouter()
@@ -13,37 +12,10 @@ export function GrowSuccessScreen() {
   const amount = params.amount || '500'
   const asset = params.asset || 'USDC'
 
-  // Animations
-  const scaleAnim = useRef(new Animated.Value(0)).current
-  const fadeAnim = useRef(new Animated.Value(0)).current
-  const checkAnim = useRef(new Animated.Value(0)).current
-
-  useEffect(() => {
-    Animated.sequence([
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 5,
-        tension: 100,
-        useNativeDriver: true,
-      }),
-      Animated.parallel([
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 400,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.spring(checkAnim, {
-          toValue: 1,
-          friction: 4,
-          useNativeDriver: true,
-        }),
-      ]),
-    ]).start()
-  }, [])
-
   return (
     <SafeAreaView style={[styles.container, isDark && styles.containerDark]} edges={['top']}>
+      <AnimatedBackground isDark={isDark} />
+      
       <View style={styles.header}>
         <View style={styles.placeholder} />
         <View style={styles.headerCenter}>
@@ -59,66 +31,51 @@ export function GrowSuccessScreen() {
         <View style={[styles.progressDot, styles.progressComplete]} />
       </View>
 
-      <View style={styles.content}>
-        {/* Success Animation */}
-        <Animated.View 
-          style={[
-            styles.successIcon,
-            {
-              transform: [{ scale: scaleAnim }],
-            },
-          ]}
-        >
-          <View style={styles.successCircle}>
-            <Animated.View style={{ transform: [{ scale: checkAnim }] }}>
-              <Icon name="check" size={48} color={colors.white} />
-            </Animated.View>
-          </View>
-        </Animated.View>
-
-        <Animated.View style={[styles.textSection, { opacity: fadeAnim }]}>
-          <Text style={[styles.title, isDark && styles.textDark]}>Deposit Successful!</Text>
-          <Text style={[styles.subtitle, isDark && styles.textSecondaryDark]}>
-            Your funds are now growing in the Shadow Vault
-          </Text>
-        </Animated.View>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Success Celebration with Confetti */}
+        <SuccessCelebration
+          isVisible={true}
+          amount={`$${parseFloat(amount).toLocaleString()}`}
+          token={asset}
+          action="deposit"
+          isDark={isDark}
+        />
 
         {/* Summary Card */}
-        <Animated.View style={{ opacity: fadeAnim }}>
-          <Card style={[styles.summaryCard, isDark && styles.cardDark] as any}>
-            <View style={styles.summaryRow}>
-              <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Amount Deposited</Text>
-              <Text style={[styles.summaryValue, isDark && styles.textDark]}>${parseFloat(amount).toLocaleString()} {asset}</Text>
-            </View>
-            <View style={[styles.divider, isDark && styles.dividerDark]} />
-            <View style={styles.summaryRow}>
-              <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Current APY</Text>
-              <Text style={styles.summaryValueGreen}>8.2%</Text>
-            </View>
-            <View style={[styles.divider, isDark && styles.dividerDark]} />
-            <View style={styles.summaryRow}>
-              <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Privacy Status</Text>
-              <View style={styles.privacyBadge}>
-                <Icon name="shield" size={14} color={colors.success} />
-                <Text style={styles.privacyBadgeText}>Shielded</Text>
-              </View>
-            </View>
-            <View style={[styles.divider, isDark && styles.dividerDark]} />
-            <View style={styles.summaryRow}>
-              <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Transaction ID</Text>
-              <Text style={[styles.txId, isDark && styles.textSecondaryDark]}>5xK7...mN9p</Text>
-            </View>
-          </Card>
-        </Animated.View>
+        <Card style={[styles.summaryCard, isDark && styles.cardDark] as any}>
+          <View style={styles.summaryRow}>
+            <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Amount Deposited</Text>
+            <Text style={[styles.summaryValue, isDark && styles.textDark]}>${parseFloat(amount).toLocaleString()} {asset}</Text>
+          </View>
+          <View style={[styles.divider, isDark && styles.dividerDark]} />
+          <View style={styles.summaryRow}>
+            <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Current APY</Text>
+            <Text style={styles.summaryValueGreen}>8.2%</Text>
+          </View>
+          <View style={[styles.divider, isDark && styles.dividerDark]} />
+          <View style={styles.summaryRow}>
+            <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Est. Daily Earnings</Text>
+            <Text style={styles.summaryValueGreen}>+${(parseFloat(amount) * 0.082 / 365).toFixed(4)}</Text>
+          </View>
+          <View style={[styles.divider, isDark && styles.dividerDark]} />
+          <View style={styles.summaryRow}>
+            <Text style={[styles.summaryLabel, isDark && styles.textSecondaryDark]}>Transaction ID</Text>
+            <Text style={[styles.txId, isDark && styles.textSecondaryDark]}>5xK7...mN9p</Text>
+          </View>
+        </Card>
 
         {/* Info Box */}
-        <Animated.View style={[styles.infoBox, isDark && styles.infoBoxDark, { opacity: fadeAnim }]}>
+        <View style={[styles.infoBox, isDark && styles.infoBoxDark]}>
           <Icon name="trending-up" size={20} color={colors.success} />
           <Text style={[styles.infoText, isDark && styles.textSecondaryDark]}>
-            Your yield will start accruing immediately. Check your portfolio to track earnings.
+            Your yield will start accruing immediately. Check your portfolio to track real-time earnings.
           </Text>
-        </Animated.View>
-      </View>
+        </View>
+      </ScrollView>
 
       <View style={[styles.footer, isDark && styles.footerDark]}>
         <Button
@@ -141,7 +98,6 @@ export function GrowSuccessScreen() {
     </SafeAreaView>
   )
 }
-
 
 const styles = StyleSheet.create({
   container: {
@@ -177,12 +133,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingBold,
   },
   headerStep: {
     color: colors.primary,
     fontSize: fontSize.xs,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.headingMedium,
   },
   placeholder: {
     width: 48,
@@ -202,46 +158,14 @@ const styles = StyleSheet.create({
   progressComplete: {
     backgroundColor: colors.success,
   },
-  content: {
+  scrollView: {
     flex: 1,
+  },
+  content: {
     paddingHorizontal: spacing.lg,
-    alignItems: 'center',
-  },
-  successIcon: {
-    marginTop: spacing.xl,
-    marginBottom: spacing.lg,
-  },
-  successCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.success,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: colors.success,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  textSection: {
-    alignItems: 'center',
-    marginBottom: spacing.xl,
-  },
-  title: {
-    color: colors.textPrimary,
-    fontSize: fontSize.xxl,
-    fontWeight: fontWeight.bold,
-    textAlign: 'center',
-    marginBottom: spacing.xs,
-  },
-  subtitle: {
-    color: colors.textSecondary,
-    fontSize: fontSize.md,
-    textAlign: 'center',
+    paddingBottom: spacing.xl,
   },
   summaryCard: {
-    width: '100%',
     marginBottom: spacing.md,
   },
   summaryRow: {
@@ -257,26 +181,12 @@ const styles = StyleSheet.create({
   summaryValue: {
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.headingSemiBold,
   },
   summaryValueGreen: {
     color: colors.success,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.bold,
-  },
-  privacyBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.successLight,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: borderRadius.full,
-  },
-  privacyBadgeText: {
-    color: colors.success,
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.headingBold,
   },
   txId: {
     color: colors.textSecondary,
@@ -294,7 +204,6 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     backgroundColor: colors.successLight,
     borderRadius: borderRadius.lg,
-    width: '100%',
   },
   infoBoxDark: {
     backgroundColor: 'rgba(34, 197, 94, 0.15)',

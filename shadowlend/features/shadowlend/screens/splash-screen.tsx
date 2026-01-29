@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, Animated, Easing } from 'react-native'
-import { colors, spacing, fontSize, fontWeight } from '@/constants/theme'
+import { colors, spacing, fontSize, fonts } from '@/constants/theme'
 import { ShadowLendLogo } from '@/components/ui'
 import { useEffect, useRef, useState } from 'react'
 
@@ -161,20 +161,20 @@ const styles = StyleSheet.create({
   title: {
     color: colors.textPrimary,
     fontSize: 38,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
     letterSpacing: -0.5,
     marginTop: spacing.lg,
   },
   subtitle: {
     color: colors.primary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
     letterSpacing: 0.5,
   },
   poweredBy: {
     color: 'rgba(255, 255, 255, 0.5)',
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
     marginBottom: spacing.lg,
     letterSpacing: 2,
     textTransform: 'uppercase',
@@ -187,13 +187,13 @@ const styles = StyleSheet.create({
   arciumTitle: {
     color: arciumColors.text,
     fontSize: 52,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
     letterSpacing: -1,
   },
   arciumTagline: {
     color: arciumColors.primary,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
     marginTop: spacing.md,
     letterSpacing: 0.5,
   },

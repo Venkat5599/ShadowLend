@@ -14,6 +14,12 @@ SplashScreenExpo.preventAutoHideAsync()
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     ...MaterialIcons.font,
+    // Mugen Grotesk - Premium heading font
+    'MugenGrotesk': require('@/assets/fonts/MugenGroteskFW-Regular.ttf'),
+    'MugenGrotesk-Light': require('@/assets/fonts/MugenGroteskFW-Light.ttf'),
+    'MugenGrotesk-Medium': require('@/assets/fonts/MugenGroteskFW-Medium.ttf'),
+    'MugenGrotesk-SemiBold': require('@/assets/fonts/MugenGroteskFW-SemiBold.ttf'),
+    'MugenGrotesk-Bold': require('@/assets/fonts/MugenGroteskFW-Bold.ttf'),
   })
   const [showSplash, setShowSplash] = useState(true)
 

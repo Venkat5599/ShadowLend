@@ -1,9 +1,11 @@
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native'
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme'
-import { Button, Icon, Card } from '@/components/ui'
+import { colors, spacing, fontSize, borderRadius, fonts } from '@/constants/theme'
+import { Button, Icon, GlassCard, AnimatedBackground } from '@/components/ui'
 import { useRouter, useLocalSearchParams } from 'expo-router'
 import { useTheme } from '@/features/theme'
+import { useDeposit } from '../hooks/use-deposit'
+import { useState } from 'react'
 
 export function GrowConfirmScreen() {
   const router = useRouter()
@@ -11,13 +13,57 @@ export function GrowConfirmScreen() {
   const params = useLocalSearchParams<{ amount: string; asset: string }>()
   const amount = params.amount || '500'
   const asset = params.asset || 'USDC'
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  const deposit = useDeposit()
 
   const estimatedApy = '8.2%'
   const estimatedEarnings = (parseFloat(amount) * 0.082 / 12).toFixed(2)
   const networkFee = '0.00025 SOL'
 
+  const handleConfirmDeposit = async () => {
+    try {
+      setIsProcessing(true)
+      
+      console.log('Starting deposit...', { amount, asset })
+      
+      // Call the deposit mutation
+      const result = await deposit.mutateAsync({
+        amount: parseFloat(amount),
+      })
+
+      console.log('Deposit successful!', result)
+
+      // Navigate to success screen with transaction signature
+      router.push({ 
+        pathname: '/grow-success', 
+        params: { 
+          amount, 
+          asset,
+          signature: result.signature 
+        } 
+      } as any)
+    } catch (error: any) {
+      setIsProcessing(false)
+      console.error('Deposit error:', error)
+      console.error('Error details:', JSON.stringify(error, null, 2))
+      
+      // Show error alert with more details
+      const errorMessage = error.message || 'Failed to process deposit. Please try again.'
+      const errorDetails = error.logs ? `\n\nLogs:\n${error.logs.join('\n')}` : ''
+      
+      Alert.alert(
+        'Deposit Failed',
+        errorMessage + errorDetails,
+        [{ text: 'OK' }]
+      )
+    }
+  }
+
   return (
     <SafeAreaView style={[styles.container, isDark && styles.containerDark]} edges={['top']}>
+      <AnimatedBackground isDark={isDark} />
+      
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.backButton}>
           <Icon name="arrow-back-ios" size={24} color={isDark ? colors.dark.text : colors.textPrimary} />
@@ -44,7 +90,7 @@ export function GrowConfirmScreen() {
         </View>
 
         {/* Amount Card */}
-        <Card style={[styles.amountCard, isDark && styles.cardDark] as any}>
+        <GlassCard isDark={isDark} intensity="medium" style={styles.amountCard}>
           <View style={styles.amountHeader}>
             <Text style={[styles.amountLabel, isDark && styles.textSecondaryDark]}>You're depositing</Text>
             <View style={styles.assetBadge}>
@@ -55,10 +101,10 @@ export function GrowConfirmScreen() {
             </View>
           </View>
           <Text style={styles.amountValue}>${parseFloat(amount).toLocaleString()}</Text>
-        </Card>
+        </GlassCard>
 
         {/* Details Card */}
-        <Card style={[styles.detailsCard, isDark && styles.cardDark] as any}>
+        <GlassCard isDark={isDark} intensity="medium" style={styles.detailsCard}>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, isDark && styles.textSecondaryDark]}>Estimated APY</Text>
             <Text style={styles.detailValueGreen}>{estimatedApy}</Text>
@@ -78,15 +124,15 @@ export function GrowConfirmScreen() {
             <Text style={[styles.detailLabel, isDark && styles.textSecondaryDark]}>Pool</Text>
             <Text style={[styles.detailValue, isDark && styles.textDark]}>Shadow Vault</Text>
           </View>
-        </Card>
+        </GlassCard>
 
         {/* Privacy Info */}
-        <View style={[styles.privacyInfo, isDark && styles.privacyInfoDark]}>
+        <GlassCard isDark={isDark} intensity="light" style={styles.privacyInfo}>
           <Icon name="visibility-off" size={20} color={colors.primary} />
           <Text style={[styles.privacyText, isDark && styles.textSecondaryDark]}>
             This transaction will be shielded. Your deposit amount and wallet history remain private.
           </Text>
-        </View>
+        </GlassCard>
 
         {/* Warning */}
         <View style={styles.warningBox}>
@@ -99,12 +145,13 @@ export function GrowConfirmScreen() {
 
       <View style={[styles.footer, isDark && styles.footerDark]}>
         <Button
-          title="Confirm Deposit"
+          title={isProcessing ? "Processing..." : "Confirm Deposit"}
           icon="lock"
           iconPosition="left"
           size="lg"
           fullWidth
-          onPress={() => router.push({ pathname: '/grow-success', params: { amount, asset } } as any)}
+          onPress={handleConfirmDeposit}
+          disabled={isProcessing || deposit.isPending}
         />
       </View>
     </SafeAreaView>
@@ -152,12 +199,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingBold,
   },
   headerStep: {
     color: colors.primary,
     fontSize: fontSize.xs,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.headingMedium,
   },
   placeholder: {
     width: 48,
@@ -198,7 +245,7 @@ const styles = StyleSheet.create({
   title: {
     color: colors.textPrimary,
     fontSize: fontSize.xxl,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingBold,
     textAlign: 'center',
   },
   subtitle: {
@@ -241,17 +288,17 @@ const styles = StyleSheet.create({
   assetIconText: {
     color: colors.white,
     fontSize: 8,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingBold,
   },
   assetName: {
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.headingSemiBold,
   },
   amountValue: {
     color: colors.primary,
     fontSize: 44,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingBold,
   },
   detailsCard: {
     marginBottom: spacing.md,
@@ -269,12 +316,12 @@ const styles = StyleSheet.create({
   detailValue: {
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.headingSemiBold,
   },
   detailValueGreen: {
     color: colors.success,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingBold,
   },
   divider: {
     height: 1,
@@ -284,13 +331,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.sm,
-    padding: spacing.md,
-    backgroundColor: colors.primaryLight,
-    borderRadius: borderRadius.lg,
-    marginBottom: spacing.md,
-  },
-  privacyInfoDark: {
-    backgroundColor: 'rgba(19, 109, 236, 0.15)',
   },
   privacyText: {
     flex: 1,

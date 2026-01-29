@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Modal } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme'
-import { Icon, Toggle, Card } from '@/components/ui'
+import { colors, spacing, fontSize, fonts, borderRadius } from '@/constants/theme'
+import { Icon, Toggle, Card, AnimatedBackground } from '@/components/ui'
 import { useState } from 'react'
 import { ellipsify } from '@/utils/ellipsify'
 import { useTheme } from '@/features/theme'
@@ -77,6 +77,8 @@ export function SettingsScreen() {
 
   return (
     <SafeAreaView style={containerStyle} edges={['top']}>
+      <AnimatedBackground isDark={isDark} />
+      
       <View style={styles.header}>
         <Text style={[styles.headerTitle, isDark && styles.textDark]}>Settings</Text>
       </View>
@@ -622,7 +624,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.xxl,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
   },
   textDark: {
     color: colors.dark.text,
@@ -672,7 +674,7 @@ const styles = StyleSheet.create({
   walletAddress: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   disconnectButton: {
     backgroundColor: colors.errorLight,
@@ -684,7 +686,7 @@ const styles = StyleSheet.create({
   disconnectText: {
     color: colors.error,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   section: {
     marginBottom: spacing.lg,
@@ -692,7 +694,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: colors.textSecondary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     marginBottom: spacing.sm,
@@ -725,7 +727,7 @@ const styles = StyleSheet.create({
   settingTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
   },
   settingSubtitle: {
     color: colors.textSecondary,
@@ -747,7 +749,7 @@ const styles = StyleSheet.create({
   version: {
     color: colors.textSecondary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
   },
   poweredBy: {
     color: '#00D4AA',
@@ -776,7 +778,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.xl,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
   },
   closeButton: {
     padding: spacing.sm,
@@ -806,7 +808,7 @@ const styles = StyleSheet.create({
   securityTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   securitySubtitle: {
     color: colors.textSecondary,
@@ -845,7 +847,7 @@ const styles = StyleSheet.create({
     flex: 1,
     color: colors.warning,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
   },
   phraseCard: {
     gap: spacing.md,
@@ -853,7 +855,7 @@ const styles = StyleSheet.create({
   phraseTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
   },
   phraseSubtitle: {
     color: colors.textSecondary,
@@ -881,13 +883,13 @@ const styles = StyleSheet.create({
   phraseNumber: {
     color: colors.textMuted,
     fontSize: fontSize.xs,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
     width: 20,
   },
   phraseText: {
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
   },
   copyButton: {
     flexDirection: 'row',
@@ -902,7 +904,7 @@ const styles = StyleSheet.create({
   copyButtonText: {
     color: colors.white,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   backupTips: {
     marginTop: spacing.lg,
@@ -911,7 +913,7 @@ const styles = StyleSheet.create({
   tipsTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
     marginBottom: spacing.xs,
   },
   tipItem: {
@@ -930,7 +932,7 @@ const styles = StyleSheet.create({
   helpSectionTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
     marginBottom: spacing.md,
   },
   faqCard: {
@@ -944,7 +946,7 @@ const styles = StyleSheet.create({
   faqQuestion: {
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
     flex: 1,
   },
   faqAnswer: {
@@ -977,7 +979,7 @@ const styles = StyleSheet.create({
   guideTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.md,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   guideDescription: {
     color: colors.textSecondary,
@@ -1003,7 +1005,7 @@ const styles = StyleSheet.create({
   contactTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.xxl,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
     marginBottom: spacing.xs,
   },
   contactSubtitle: {
@@ -1039,7 +1041,7 @@ const styles = StyleSheet.create({
   contactOptionTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   contactOptionDescription: {
     color: colors.textSecondary,
@@ -1061,7 +1063,7 @@ const styles = StyleSheet.create({
   responseTimeText: {
     color: colors.textSecondary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
   },
   // Network Modal styles
   networkInfo: {
@@ -1112,7 +1114,7 @@ const styles = StyleSheet.create({
   networkName: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.semiBold,
   },
   networkDescription: {
     color: colors.textSecondary,
@@ -1132,6 +1134,6 @@ const styles = StyleSheet.create({
     flex: 1,
     color: colors.warning,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.medium,
   },
 })

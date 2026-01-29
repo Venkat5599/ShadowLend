@@ -1,7 +1,9 @@
-import { Pressable, StyleSheet, Text, View, ViewStyle, TextStyle } from 'react-native'
-import { colors, borderRadius, fontSize, fontWeight, spacing } from '@/constants/theme'
+import { Pressable, StyleSheet, Text, View, ViewStyle, TextStyle, Animated } from 'react-native'
+import { colors, borderRadius, fontSize, fontWeight, spacing, fonts } from '@/constants/theme'
 import { Icon, IconName } from './icon'
 import { useTheme } from '@/features/theme'
+import { useRef } from 'react'
+import { haptics } from '@/utils/haptics'
 
 interface ButtonProps {
   title: string
@@ -27,10 +29,38 @@ export function Button({
   style,
 }: ButtonProps) {
   const { isDark } = useTheme()
+  const scaleAnim = useRef(new Animated.Value(1)).current
+
+  const handlePressIn = () => {
+    haptics.light()
+    Animated.spring(scaleAnim, {
+      toValue: 0.97,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 0,
+    }).start()
+  }
+
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 4,
+    }).start()
+  }
+
+  const handlePress = () => {
+    if (onPress && !disabled) {
+      haptics.medium()
+      onPress()
+    }
+  }
 
   const buttonStyles: ViewStyle[] = [
     styles.base,
     styles[variant],
+    isDark && variant === 'primary' && styles.primaryDark,
     isDark && variant === 'outline' && styles.outlineDark,
     styles[`size_${size}`],
     fullWidth && styles.fullWidth,
@@ -50,22 +80,22 @@ export function Button({
 
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
       disabled={disabled}
-      style={({ pressed }) => [
-        ...buttonStyles,
-        pressed && styles.pressed,
-      ]}
     >
-      <View style={styles.content}>
-        {icon && iconPosition === 'left' && (
-          <Icon name={icon} size={size === 'lg' ? 24 : 20} color={iconColor} />
-        )}
-        <Text style={textStyles}>{title}</Text>
-        {icon && iconPosition === 'right' && (
-          <Icon name={icon} size={size === 'lg' ? 24 : 20} color={iconColor} />
-        )}
-      </View>
+      <Animated.View style={[buttonStyles, { transform: [{ scale: scaleAnim }] }]}>
+        <View style={styles.content}>
+          {icon && iconPosition === 'left' && (
+            <Icon name={icon} size={size === 'lg' ? 24 : 20} color={iconColor} />
+          )}
+          <Text style={textStyles}>{title}</Text>
+          {icon && iconPosition === 'right' && (
+            <Icon name={icon} size={size === 'lg' ? 24 : 20} color={iconColor} />
+          )}
+        </View>
+      </Animated.View>
     </Pressable>
   )
 }
@@ -74,15 +104,30 @@ const styles = StyleSheet.create({
   base: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius.full,
+    // Enhanced Umbra-style soft shadow on buttons
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
   },
   primary: {
     backgroundColor: colors.primary,
+    // Additional colored glow - more visible
     shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  primaryDark: {
+    backgroundColor: '#00d4ff',
+    shadowColor: '#00d4ff',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 6,
   },
   secondary: {
     backgroundColor: colors.primaryLight,
@@ -116,16 +161,13 @@ const styles = StyleSheet.create({
   disabled: {
     opacity: 0.5,
   },
-  pressed: {
-    transform: [{ scale: 0.98 }],
-  },
   content: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
   },
   text: {
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingSemiBold,
   },
   text_primary: {
     color: colors.white,

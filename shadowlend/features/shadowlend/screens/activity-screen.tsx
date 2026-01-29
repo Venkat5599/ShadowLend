@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme'
+import { colors, spacing, fontSize, fonts, borderRadius } from '@/constants/theme'
 import { Icon, ShadowLendLogo } from '@/components/ui'
 import { ActivityItem } from '../components'
 import { useTheme } from '@/features/theme'
@@ -141,7 +141,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
   },
   shieldButton: {
     width: 48,
@@ -162,7 +162,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.xl,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
     marginBottom: spacing.sm,
   },
   activityList: {

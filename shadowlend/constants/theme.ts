@@ -31,11 +31,12 @@ export const colors = {
 
   // Dark mode variants
   dark: {
-    background: '#101822',
-    card: '#1e293b',
-    text: '#f1f5f9',
-    textSecondary: '#94a3b8',
-    border: '#334155',
+    background: '#0a1929', // Dark teal/blue background
+    card: '#132f4c', // Darker teal card
+    text: '#e3f2fd', // Light cyan-tinted white
+    textSecondary: '#90caf9', // Bright cyan for secondary text
+    border: '#1e4976', // Teal border
+    accent: '#00d4ff', // Bright cyan accent
   },
 }
 
@@ -57,6 +58,38 @@ export const borderRadius = {
   full: 9999,
 }
 
+// Umbra-style shadow presets for consistent soft shadows
+export const shadows = {
+  soft: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  medium: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  strong: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  colored: (color: string) => ({
+    shadowColor: color,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 3,
+  }),
+}
+
 export const fontSize = {
   xs: 10,
   sm: 12,
@@ -74,4 +107,29 @@ export const fontWeight = {
   semibold: '600' as const,
   bold: '700' as const,
   extrabold: '800' as const,
+}
+
+// Font families - Use Mugen Grotesk consistently across the app
+// This ensures visual consistency like the Figma Crypto Trading App UI Kit
+export const fonts = {
+  // Primary font family - Mugen Grotesk for all text
+  regular: 'MugenGrotesk',
+  medium: 'MugenGrotesk-Medium',
+  semiBold: 'MugenGrotesk-SemiBold',
+  bold: 'MugenGrotesk-Bold',
+  light: 'MugenGrotesk-Light',
+  extraBold: 'MugenGrotesk-ExtraBold',
+  
+  // Legacy aliases for backward compatibility
+  heading: 'MugenGrotesk',
+  headingBold: 'MugenGrotesk-Bold',
+  headingMedium: 'MugenGrotesk-Medium',
+  headingSemiBold: 'MugenGrotesk-SemiBold',
+  headingLight: 'MugenGrotesk-Light',
+  
+  // Body aliases (now using Mugen Grotesk for consistency)
+  body: 'MugenGrotesk',
+  bodyMedium: 'MugenGrotesk-Medium',
+  bodySemiBold: 'MugenGrotesk-SemiBold',
+  bodyBold: 'MugenGrotesk-Bold',
 }

@@ -1,13 +1,13 @@
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform } from 'react-native'
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Platform, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme'
-import { Button, Icon, Toggle } from '@/components/ui'
-import { useState } from 'react'
+import { colors, spacing, fontSize, borderRadius, fonts } from '@/constants/theme'
+import { Button, Icon, Toggle, NumberPad, GlassCard, AnimatedBackground, TokenIcon } from '@/components/ui'
+import { useState, useRef } from 'react'
 import { useRouter } from 'expo-router'
 import { useTheme } from '@/features/theme'
 import { useWallet } from '@/features/account/use-wallet'
 
-const QUICK_PERCENTAGES = ['25%', '50%', '75%', 'Max']
+const QUICK_PERCENTAGES = ['0%', '10%', '25%', '50%', '75%', '100%']
 
 export function GrowScreen() {
   const router = useRouter()
@@ -15,14 +15,44 @@ export function GrowScreen() {
   const { disconnect } = useWallet()
   const [amount, setAmount] = useState('')
   const [privacyEnabled, setPrivacyEnabled] = useState(true)
+  const inputRef = useRef<TextInput>(null)
   const availableBalance = 1240.5
+  
+  // Use hook for responsive width detection
+  const { width } = useWindowDimensions()
+  const isMobileDevice = Platform.OS === 'ios' || Platform.OS === 'android'
+  const isSmallScreen = width <= 768
+  const showNumberPad = isMobileDevice // Only show number pad on actual mobile devices
 
   const handleQuickSelect = (percentage: string) => {
-    if (percentage === 'Max') {
+    const pct = parseInt(percentage) / 100
+    if (pct === 1) {
       setAmount(availableBalance.toString())
+    } else if (pct === 0) {
+      setAmount('')
     } else {
-      const pct = parseInt(percentage) / 100
       setAmount((availableBalance * pct).toFixed(2))
+    }
+  }
+
+  const handleNumberPress = (value: string) => {
+    // Prevent multiple decimal points
+    if (value === '.' && amount.includes('.')) return
+    // Limit decimal places to 2
+    if (amount.includes('.')) {
+      const decimals = amount.split('.')[1]
+      if (decimals && decimals.length >= 2) return
+    }
+    setAmount(prev => prev + value)
+  }
+
+  const handleDelete = () => {
+    setAmount(prev => prev.slice(0, -1))
+  }
+
+  const handleDecimal = () => {
+    if (!amount.includes('.')) {
+      setAmount(prev => (prev === '' ? '0.' : prev + '.'))
     }
   }
 
@@ -31,112 +61,129 @@ export function GrowScreen() {
     router.replace('/(tabs)' as any)
   }
 
+  const displayAmount = amount || '0'
+
   return (
     <SafeAreaView style={[styles.container, isDark && styles.containerDark]} edges={['top']}>
+      <AnimatedBackground isDark={isDark} />
+      
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.closeButton}>
-          <Icon name="close" size={24} color={isDark ? colors.dark.text : colors.textPrimary} />
+        <Pressable onPress={() => router.back()} style={styles.backButton}>
+          <Icon name="arrow-back-ios" size={20} color={isDark ? colors.dark.text : colors.textPrimary} />
         </Pressable>
-        <View style={styles.headerCenter}>
-          <Text style={[styles.headerTitle, isDark && styles.textDark]}>Grow Assets</Text>
-          <Text style={styles.headerStep}>Step 1 of 3</Text>
-        </View>
+        <Text style={[styles.headerTitle, isDark && styles.textDark]}>Deposit USDC</Text>
         <View style={styles.headerRight}>
           <Pressable style={[styles.iconButton, isDark && styles.iconButtonDark]} onPress={toggleTheme}>
             <Icon name={isDark ? 'light-mode' : 'dark-mode'} size={20} color={isDark ? colors.dark.text : colors.textPrimary} />
           </Pressable>
-          <Pressable style={[styles.iconButton, isDark && styles.iconButtonDark]} onPress={handleDisconnect}>
-            <Icon name="logout" size={20} color={colors.error} />
-          </Pressable>
         </View>
       </View>
 
-      <View style={styles.progressContainer}>
-        <View style={[styles.progressDot, styles.progressActive]} />
-        <View style={[styles.progressDot, isDark && styles.progressDotDark]} />
-        <View style={[styles.progressDot, isDark && styles.progressDotDark]} />
-      </View>
-
-      <KeyboardAvoidingView 
-        style={styles.keyboardView} 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.scrollContent,
+          showNumberPad && styles.scrollContentWithPad
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
-        <ScrollView 
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.titleSection}>
-            <Text style={[styles.title, isDark && styles.textDark]}>How much would you like to grow?</Text>
-            <Text style={[styles.subtitle, isDark && styles.textSecondaryDark]}>Select amount to deposit into the vault.</Text>
-          </View>
-
-          <Pressable style={[styles.assetSelector, isDark && styles.assetSelectorDark]}>
-            <View style={styles.assetIcon}>
-              <Text style={styles.assetIconText}>USDC</Text>
-            </View>
-            <Text style={[styles.assetName, isDark && styles.textDark]}>USDC</Text>
-            <Icon name="expand-more" size={20} color={isDark ? colors.dark.text : colors.textPrimary} />
-          </Pressable>
-
-          <View style={styles.inputSection}>
-            <View style={styles.inputRow}>
-              <Text style={[styles.currencySymbol, isDark && styles.textDark]}>$</Text>
-              <TextInput
-                style={[styles.amountInput, isDark && styles.textDark]}
-                value={amount}
-                onChangeText={setAmount}
-                placeholder="0"
-                placeholderTextColor={isDark ? colors.dark.textSecondary : colors.textMuted}
-                keyboardType="decimal-pad"
-              />
-            </View>
-            <View style={[styles.availableBadge, isDark && styles.availableBadgeDark]}>
-              <Text style={styles.availableText}>
-                Available: {availableBalance.toLocaleString()} USDC
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.quickSelectRow}>
-            {QUICK_PERCENTAGES.map((pct) => (
-              <Pressable
-                key={pct}
-                style={[styles.quickSelectButton, isDark && styles.quickSelectButtonDark]}
-                onPress={() => handleQuickSelect(pct)}
-              >
-                <Text style={[styles.quickSelectText, isDark && styles.textDark]}>{pct}</Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <View style={[styles.privacyCard, isDark && styles.privacyCardDark]}>
-            <View style={styles.privacyHeader}>
-              <View style={[styles.privacyIconContainer, isDark && styles.privacyIconContainerDark]}>
-                <Icon name="shield" size={24} color={colors.primary} />
-              </View>
-              <View style={styles.privacyTextContainer}>
-                <Text style={[styles.privacyTitle, isDark && styles.textDark]}>Privacy Shield</Text>
-                <Text style={[styles.privacySubtitle, isDark && styles.textSecondaryDark]}>Powered by Arcium MXE</Text>
-              </View>
-              <Toggle value={privacyEnabled} onValueChange={setPrivacyEnabled} />
-            </View>
-            <View style={[styles.privacyDivider, isDark && styles.dividerDark]} />
-            <Text style={[styles.privacyDescription, isDark && styles.textSecondaryDark]}>
-              Your transaction is automatically shielded for privacy. Your wallet history remains hidden from public view.
+        {/* Amount Display Section */}
+        <GlassCard isDark={isDark} intensity="medium" style={styles.amountCard}>
+          <View style={styles.amountHeader}>
+            <TokenIcon symbol="USDC" size={32} backgroundColor="#2775CA" />
+            <Text style={[styles.amountLabel, isDark && styles.textSecondaryDark]}>
+              Enter Amount in USDC
             </Text>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          
+          <Pressable 
+            style={styles.amountDisplay}
+            onPress={() => inputRef.current?.focus()}
+          >
+            <View style={styles.amountRow}>
+              <Text style={[styles.currencySymbol, isDark && styles.textDark]}>$</Text>
+              {showNumberPad ? (
+                // Mobile: Show text display, use NumberPad for input
+                <Text style={[styles.amountText, isDark && styles.textDark]}>
+                  {displayAmount}
+                </Text>
+              ) : (
+                // Web/Desktop: Show editable TextInput
+                <TextInput
+                  ref={inputRef}
+                  style={[styles.amountInput, isDark && styles.amountInputDark]}
+                  value={amount}
+                  onChangeText={setAmount}
+                  placeholder="0"
+                  placeholderTextColor={isDark ? colors.dark.textSecondary : colors.textMuted}
+                  keyboardType="decimal-pad"
+                  autoFocus={false}
+                />
+              )}
+              <Text style={[styles.currencyLabel, isDark && styles.textSecondaryDark]}>USDC</Text>
+            </View>
+          </Pressable>
 
+          <Text style={[styles.minMaxText, isDark && styles.textSecondaryDark]}>
+            Min $1 - Max ${availableBalance.toLocaleString()}
+          </Text>
+
+          <Text style={[styles.balanceText, isDark && styles.textDark]}>
+            Current Balance: <Text style={styles.balanceValue}>${availableBalance.toLocaleString()} USDC</Text>
+          </Text>
+        </GlassCard>
+
+        {/* Quick Percentage Buttons */}
+        <View style={styles.percentageRow}>
+          {QUICK_PERCENTAGES.map((pct) => (
+            <Pressable
+              key={pct}
+              style={[
+                styles.percentageButton,
+                isDark && styles.percentageButtonDark,
+              ]}
+              onPress={() => handleQuickSelect(pct)}
+            >
+              <Text style={[styles.percentageText, isDark && styles.textSecondaryDark]}>
+                {pct}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* Privacy Card */}
+        <GlassCard isDark={isDark} intensity="medium" style={styles.privacyCard}>
+          <View style={styles.privacyHeader}>
+            <View style={[styles.privacyIconContainer, isDark && styles.privacyIconContainerDark]}>
+              <Icon name="shield" size={24} color={colors.primary} />
+            </View>
+            <View style={styles.privacyTextContainer}>
+              <Text style={[styles.privacyTitle, isDark && styles.textDark]}>Privacy Shield</Text>
+              <Text style={[styles.privacySubtitle, isDark && styles.textSecondaryDark]}>Powered by Arcium MXE</Text>
+            </View>
+            <Toggle value={privacyEnabled} onValueChange={setPrivacyEnabled} />
+          </View>
+        </GlassCard>
+      </ScrollView>
+
+      {/* Number Pad - Mobile Only */}
+      {showNumberPad && (
+        <NumberPad
+          onPress={handleNumberPress}
+          onDelete={handleDelete}
+          onDecimal={handleDecimal}
+        />
+      )}
+
+      {/* Footer with CTA */}
       <View style={[styles.footer, isDark && styles.footerDark]}>
         <Button
-          title="Continue"
-          icon="arrow-forward"
+          title="DEPOSIT USDC"
           size="lg"
           fullWidth
           onPress={() => router.push({ pathname: '/grow-confirm', params: { amount: amount || '0', asset: 'USDC' } } as any)}
+          disabled={!amount || parseFloat(amount) <= 0}
         />
       </View>
     </SafeAreaView>
@@ -157,40 +204,23 @@ const styles = StyleSheet.create({
   textSecondaryDark: {
     color: colors.dark.textSecondary,
   },
-  dividerDark: {
-    backgroundColor: colors.dark.border,
-  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.md,
   },
-  closeButton: {
-    width: 48,
-    height: 48,
+  backButton: {
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  headerCenter: {
-    alignItems: 'center',
   },
   headerTitle: {
     color: colors.textPrimary,
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.bold,
-  },
-  headerStep: {
-    color: colors.primary,
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.medium,
-  },
-  helpButton: {
-    width: 48,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
+    fontSize: fontSize.lg,
+    fontFamily: fonts.headingSemiBold,
   },
   headerRight: {
     flexDirection: 'row',
@@ -198,168 +228,144 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   iconButton: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     borderRadius: borderRadius.full,
     backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: colors.border,
+    // Enhanced Umbra-style soft shadow - more visible
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 3,
   },
   iconButtonDark: {
     backgroundColor: colors.dark.card,
     borderColor: colors.dark.border,
   },
-  progressContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-  },
-  progressDot: {
-    width: 48,
-    height: 6,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.textMuted,
-  },
-  progressDotDark: {
-    backgroundColor: colors.dark.border,
-  },
-  progressActive: {
-    backgroundColor: colors.primary,
-  },
-  content: {
+  scrollView: {
     flex: 1,
+  },
+  scrollContent: {
     paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+    paddingTop: spacing.sm, // Add top padding for shadow visibility
   },
-  titleSection: {
+  scrollContentWithPad: {
+    paddingBottom: spacing.xs, // Less padding when NumberPad is visible
+  },
+  amountCard: {
     alignItems: 'center',
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.md,
+    marginBottom: spacing.lg, // Increased margin for shadow space
+    marginTop: spacing.sm, // Add top margin for shadow visibility
   },
-  title: {
-    color: colors.textPrimary,
-    fontSize: fontSize.xxxl,
-    fontWeight: fontWeight.bold,
-    textAlign: 'center',
+  amountHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
   },
-  subtitle: {
+  amountLabel: {
     color: colors.textSecondary,
     fontSize: fontSize.sm,
-    marginTop: spacing.sm,
+    fontFamily: fonts.regular,
   },
-  assetSelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.white,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginTop: spacing.lg,
-  },
-  assetSelectorDark: {
-    backgroundColor: colors.dark.card,
-    borderColor: colors.dark.border,
-  },
-  assetIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: borderRadius.full,
-    backgroundColor: '#2775ca',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  assetIconText: {
-    color: colors.white,
-    fontSize: 6,
-    fontWeight: fontWeight.bold,
-  },
-  assetName: {
-    color: colors.textPrimary,
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
-  },
-  inputSection: {
-    alignItems: 'center',
-    marginTop: spacing.xl,
-  },
-  inputRow: {
+  amountDisplay: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: spacing.md,
+    minHeight: 60,
+    width: '100%',
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
   },
   currencySymbol: {
     color: colors.textPrimary,
-    fontSize: fontSize.display,
-    fontWeight: fontWeight.bold,
+    fontSize: 40,
+    fontFamily: fonts.bold,
+  },
+  amountText: {
+    color: colors.textPrimary,
+    fontSize: 48,
+    fontFamily: fonts.bold,
+    minWidth: 60,
+    textAlign: 'center',
+  },
+  currencyLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xl,
+    fontFamily: fonts.semiBold,
   },
   amountInput: {
     color: colors.textPrimary,
     fontSize: 48,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.bold,
     textAlign: 'center',
-    minWidth: 100,
-    borderWidth: 0,
-    outlineWidth: 0,
-    outlineStyle: 'none',
-    backgroundColor: 'transparent',
-  } as any,
-  availableBadge: {
-    backgroundColor: colors.primaryLight,
-    paddingHorizontal: spacing.md,
+    minWidth: 150,
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    marginTop: spacing.sm,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    outlineStyle: 'none',
+  } as any,
+  amountInputDark: {
+    color: colors.dark.text,
   },
-  availableBadgeDark: {
-    backgroundColor: 'rgba(19, 109, 236, 0.2)',
-  },
-  availableText: {
-    color: colors.primary,
+  minMaxText: {
+    color: colors.textSecondary,
     fontSize: fontSize.xs,
-    fontWeight: fontWeight.semibold,
+    fontFamily: fonts.regular,
+    marginBottom: spacing.md,
   },
-  quickSelectRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacing.md,
-    marginTop: spacing.xl,
-  },
-  quickSelectButton: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.xl,
-  },
-  quickSelectButtonDark: {
-    backgroundColor: colors.dark.card,
-    borderColor: colors.dark.border,
-  },
-  quickSelectText: {
+  balanceText: {
     color: colors.textPrimary,
     fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
+    fontFamily: fonts.regular,
   },
-  privacyCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.xxl,
+  balanceValue: {
+    fontFamily: fonts.semiBold,
+  },
+  percentageRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.sm, // Added gap for better spacing
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  percentageButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.lg,
-    marginTop: 'auto',
-    marginBottom: spacing.lg,
-    gap: spacing.md,
+    backgroundColor: colors.white,
+    // Enhanced Umbra-style soft shadow - more visible
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  privacyCardDark: {
+  percentageButtonDark: {
     backgroundColor: colors.dark.card,
     borderColor: colors.dark.border,
+  },
+  percentageText: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontFamily: fonts.medium,
+  },
+  privacyCard: {
+    marginTop: spacing.sm, // Add margin for shadow visibility
   },
   privacyHeader: {
     flexDirection: 'row',
@@ -373,6 +379,12 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
     alignItems: 'center',
     justifyContent: 'center',
+    // Enhanced Umbra-style soft shadow - more visible
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 3,
   },
   privacyIconContainerDark: {
     backgroundColor: 'rgba(19, 109, 236, 0.2)',
@@ -383,31 +395,11 @@ const styles = StyleSheet.create({
   privacyTitle: {
     color: colors.textPrimary,
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold,
+    fontFamily: fonts.headingBold,
   },
   privacySubtitle: {
     color: colors.textSecondary,
     fontSize: fontSize.xs,
-  },
-  privacyDivider: {
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  privacyDescription: {
-    color: colors.textSecondary,
-    fontSize: fontSize.xs,
-    fontStyle: 'italic',
-    lineHeight: 18,
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
   },
   footer: {
     padding: spacing.lg,
@@ -419,8 +411,5 @@ const styles = StyleSheet.create({
   footerDark: {
     backgroundColor: colors.dark.card,
     borderTopColor: colors.dark.border,
-  },
-  ctaContainer: {
-    paddingBottom: spacing.xl,
   },
 })
