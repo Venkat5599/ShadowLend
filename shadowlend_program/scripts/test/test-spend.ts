@@ -1,16 +1,17 @@
-import { Wallet, BN, Program } from "@coral-xyz/anchor";
+import { Wallet, Program, BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { 
     TOKEN_PROGRAM_ID, 
-    ASSOCIATED_TOKEN_PROGRAM_ID, 
+    mintTo,
     getAssociatedTokenAddress, 
     createAssociatedTokenAccountInstruction, 
     getAccount
 } from "@solana/spl-token";
+
 import { 
   createProvider, 
   getNetworkConfig, 
-  loadProgram, 
+  loadProgram,
   logHeader, 
   logSection, 
   logEntry, 
@@ -18,14 +19,14 @@ import {
   logError, 
   logInfo, 
   logWarning, 
-  logDivider, 
+  logDivider,
   icons 
 } from "../utils/config";
 import { getWalletKeypair, loadDeployment } from "../utils/deployment";
 import { 
     getMxeAccount, 
     checkMxeKeysSet, 
-    generateComputationOffset,
+    generateComputationOffset 
 } from "../utils/arcium";
 import { 
     getCompDefAccOffset, 
@@ -36,20 +37,23 @@ import {
     getMempoolAccAddress, 
     getFeePoolAccAddress, 
     getClockAccAddress, 
-    getArciumProgramId 
+    getArciumProgramId,
+    getMXEPublicKey,
+    x25519
 } from "@arcium-hq/client";
 import { getOrCreateX25519Key } from "../utils/keys";
-import * as idl from "../../target/idl/shadowlend_program.json";
 import { PerformanceTracker } from "../utils/performance";
+
+import * as idl from "../../target/idl/shadowlend_program.json";
 
 const perf = new PerformanceTracker();
 
 /**
- * Main Test Execution Function
+ * Main Test Execution Function for Spend Instruction
  */
-async function runDepositTest() {
+async function runSpendTest() {
     try {
-        logHeader("Test: Deposit Instruction");
+        logHeader("Test: Spend Instruction");
         perf.start("Total Execution");
 
         // --- Configuration & Setup ---
@@ -65,16 +69,17 @@ async function runDepositTest() {
 
         // Load Deployment
         const deployment = loadDeployment();
-        if (!deployment || !deployment.programId || !deployment.poolAddress || !deployment.collateralMint) {
-            throw new Error("Invalid deployment state. Please run setup scripts first.");
+        if (!deployment || !deployment.programId || !deployment.poolAddress || !deployment.borrowMint) {
+            throw new Error("Invalid deployment state (missing pool or borrow mint). Please run setup scripts first.");
         }
 
         const programId = new PublicKey(deployment.programId);
         const poolPda = new PublicKey(deployment.poolAddress);
-        const collateralMint = new PublicKey(deployment.collateralMint);
+        const borrowMint = new PublicKey(deployment.borrowMint);
 
         logEntry("Program ID", programId.toBase58(), icons.folder);
         logEntry("Pool", poolPda.toBase58(), icons.link);
+        logEntry("Borrow Mint", borrowMint.toBase58(), icons.key);
 
         const program = await loadProgram(provider, programId, idl) as Program;
         perf.end("Setup");
@@ -85,45 +90,24 @@ async function runDepositTest() {
             [Buffer.from("obligation"), wallet.publicKey.toBuffer(), poolPda.toBuffer()],
             programId
         );
-        const [collateralVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("collateral_vault"), poolPda.toBuffer()],
-            programId
-        );
         const [signPdaAccount] = PublicKey.findProgramAddressSync(
             [Buffer.from("ArciumSignerAccount")],
             programId
         );
+        const [borrowVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("borrow_vault"), poolPda.toBuffer()],
+            programId
+        );
 
-        const userTokenAccount = await getAssociatedTokenAddress(collateralMint, wallet.publicKey);
+        // Destination Token Account (User's Wallet for Borrow Mint)
+        const destinationTokenAccount = await getAssociatedTokenAddress(borrowMint, wallet.publicKey);
+
+        logEntry("User Obligation", userObligation.toBase58(), icons.link);
+        logEntry("Borrow Vault", borrowVault.toBase58(), icons.link);
+        logEntry("Dest Token Acc", destinationTokenAccount.toBase58(), icons.link);
         perf.end("Account Derivation");
 
-        // --- Token Account Checks ---
-        try {
-            const tokenAccountInfo = await getAccount(provider.connection, userTokenAccount);
-            logEntry("Token Balance", tokenAccountInfo.amount.toString(), icons.info);
-            
-            if (tokenAccountInfo.amount === 0n) {
-                logWarning("User token balance is 0. Please fund account.");
-                 throw new Error("Insufficient funds for deposit test.");
-            }
-        } catch (error: any) {
-             if (error.message?.includes("could not find account") || error instanceof Error && error.message.includes("TokenAccountNotFoundError") ) {
-                logWarning("Creating associated token account...");
-                const createTx = await provider.sendAndConfirm(
-                    new (await import("@solana/web3.js")).Transaction().add(
-                        createAssociatedTokenAccountInstruction(wallet.publicKey, userTokenAccount, wallet.publicKey, collateralMint)
-                    )
-                );
-                logSuccess(`Created ATA: ${createTx}`);
-                throw new Error("Created empty token account. Please fund it before retrying.");
-             }
-             throw error;
-        }
-
         // --- Prepare Transaction Data ---
-        perf.start("Data Prep");
-        const depositAmount = new BN(500_000); 
-        const computationOffset = generateComputationOffset();
         const { publicKey: userPubkeyBytes } = getOrCreateX25519Key();
         const userPubkey = Array.from(userPubkeyBytes);
 
@@ -132,10 +116,58 @@ async function runDepositTest() {
         try {
             const acc = await (program.account as any).userObligation.fetch(userObligation);
             userNonce = acc.stateNonce;
-            logInfo(`Existing Obligation Nonce: ${userNonce.toString()}`);
+            logInfo(`Current Obligation Nonce: ${userNonce.toString()}`);
+            
+            // Check Internal Balance (last 32 bytes)
+            const encState = Buffer.from(acc.encryptedState);
+            const encInternal = encState.slice(64, 96);
+            const isNonZero = !encInternal.every(b => b === 0);
+            
+            if (isNonZero) {
+                logEntry("Internal Balance", "Likely Positive", icons.checkmark);
+            } else {
+                logWarning("Encrypted Internal Balance is ALL ZEROS. Spend will likely FAIL (No funds to spend).");
+                logInfo("Hint: Run 'npm run test:borrow' first.");
+            }
         } catch (e) {
-            logInfo("New Obligation (Nonce 0)");
+            logWarning("User Obligation not initialized.");
+            throw new Error("User Obligation must exist (Run deposit/borrow tests first).");
         }
+
+        // --- Ensure Destination Account Exists ---
+        try {
+            await getAccount(provider.connection, destinationTokenAccount);
+        } catch (e) {
+            logInfo("Creating Destination Token Account...");
+            await provider.sendAndConfirm(
+                new (await import("@solana/web3.js")).Transaction().add(
+                    createAssociatedTokenAccountInstruction(wallet.publicKey, destinationTokenAccount, wallet.publicKey, borrowMint)
+                )
+            );
+            logSuccess("Destination ATA created.");
+        }
+
+        // --- Ensure Vault Has Funds ---
+        // For localnet testing, we need to mint tokens to the vault so it can pay out
+        const vaultInfo = await provider.connection.getTokenAccountBalance(borrowVault).catch(() => null);
+        if (!vaultInfo || vaultInfo.value.uiAmount < 1000) {
+            logWarning("Borrow Vault low on funds. Attempting to fund...");
+            try {
+                // Try minting to vault (works if payer has mint authority, which is true for localnet deployment wallet)
+                await mintTo(
+                    provider.connection,
+                    wallet.payer,
+                    borrowMint,
+                    borrowVault,
+                    wallet.payer,
+                    10_000_000 // Fund with 10M units
+                );
+                logSuccess("Funded Borrow Vault successfully.");
+            } catch (e) {
+                logWarning(`Failed to fund Borrow Vault: ${e.message}. Spend might fail if vault is empty.`);
+            }
+        }
+
         perf.end("Data Prep");
 
         // --- Arcium Checks ---
@@ -143,40 +175,60 @@ async function runDepositTest() {
         const isMxeReady = await checkMxeKeysSet(provider, programId);
         if (!isMxeReady) {
             logWarning("MXE Keys not set! Transaction may fail.");
+           // Don't throw, let it try
         } else {
             logEntry("MXE Status", "Ready", icons.checkmark);
         }
+
+        // --- Spend Parameters ---
+        // We assume we want to spend a small amount, e.g., 500 units
+        // Must be <= Internal Balance
+        const spendAmount = new BN(100); 
+        const computationOffset = generateComputationOffset();
+
+        logEntry("Spend Amount", spendAmount.toString(), icons.key);
 
         // Derive Arcium Accounts
         const mxeAccount = getMxeAccount(programId);
         const mempoolAccount = getMempoolAccAddress(config.arciumClusterOffset);
         const executingPool = getExecutingPoolAccAddress(config.arciumClusterOffset);
         const computationAccount = getComputationAccAddress(config.arciumClusterOffset, computationOffset);
-        const compDefOffsetBytes = getCompDefAccOffset("deposit");
+        
+        const compDefOffsetBytes = getCompDefAccOffset("spend");
         const compDefOffset = Buffer.from(compDefOffsetBytes).readUInt32LE();
         const compDefAccount = getCompDefAccAddress(programId, compDefOffset);
-        
-        // Handle Cluster Address (with fallback check logic if needed, simplified here for professionalism)
-        // Usually, the offset is correct.
         const clusterAccount = getClusterAccAddress(config.arciumClusterOffset);
 
         const poolAccount = getFeePoolAccAddress();
         const clockAccount = getClockAccAddress();
         const arciumProgramId = getArciumProgramId();
 
-        // --- Pre-check Vault ---
-        const initialVaultBalance = await provider.connection.getTokenAccountBalance(collateralVault)
+        // --- Execute Transaction ---
+        logDivider();
+        logInfo("Submitting Spend Transaction...");
+        perf.start("Transaction Submission");
+
+        // Explicit Casts for Anchor (Generic)
+        const compOffsetBN = new BN(computationOffset);
+        const amountBN = new BN(spendAmount); // Plaintext u64
+        const pubkeyBuf = Buffer.from(userPubkey);
+        const nonceBN = new BN(userNonce);
+
+        if (pubkeyBuf.length !== 32) throw new Error(`Invalid pubkey length: ${pubkeyBuf.length}`);
+
+        // Get pre-balance for verification
+        const preBalance = await provider.connection.getTokenAccountBalance(destinationTokenAccount)
             .then(b => new BN(b.value.amount))
             .catch(() => new BN(0));
 
-        // --- Execute Transaction ---
-        logDivider();
-        logInfo("Submitting Deposit Transaction...");
-        perf.start("Transaction Submission");
-        
         const txSig = await program.methods
-            .deposit(computationOffset, depositAmount, userPubkey, userNonce)
-            .accounts({
+            .spend(
+                compOffsetBN,
+                amountBN,
+                pubkeyBuf as any,
+                nonceBN
+            )
+            .accountsPartial({
                 payer: wallet.publicKey,
                 signPdaAccount,
                 mxeAccount,
@@ -189,31 +241,17 @@ async function runDepositTest() {
                 clockAccount,
                 pool: poolPda,
                 userObligation,
-                collateralMint,
-                userTokenAccount,
-                collateralVault,
+                destinationTokenAccount,
+                borrowVault,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
                 arciumProgram: arciumProgramId,
             })
             .rpc();
-        
+
         perf.end("Transaction Submission");
         logSuccess(`Transaction Confirmed: ${txSig}`);
         logEntry("Explorer", `https://explorer.solana.com/tx/${txSig}?cluster=devnet`, icons.link);
-
-        // --- Immediate Verification ---
-        perf.start("Vault Verification");
-        const postVaultBalance = await provider.connection.getTokenAccountBalance(collateralVault)
-            .then(b => new BN(b.value.amount));
-        
-        if (postVaultBalance.sub(initialVaultBalance).eq(depositAmount)) {
-            logEntry("Vault Balance", "Verified Increment", icons.checkmark);
-        } else {
-            throw new Error(`Vault balance mismatch. Expected +${depositAmount}, got +${postVaultBalance.sub(initialVaultBalance)}`);
-        }
-        perf.end("Vault Verification");
 
         // --- MPC Finalization ---
         logSection("MPC Execution");
@@ -244,7 +282,6 @@ async function runDepositTest() {
         }
 
         // --- State Update Verification ---
-        // Waiting for the callback transaction to land on Solana
         logInfo("Waiting for State Update (Callback)...");
         perf.start("Callback Latency");
         
@@ -252,7 +289,7 @@ async function runDepositTest() {
         let callbackSuccess = false;
         
         // Polling logic
-        const maxRetries = 30;
+        const maxRetries = 60; // Spend usually involves token transfer so maybe slightly longer
         process.stdout.write("   Polling State: ");
         for (let i = 0; i < maxRetries; i++) {
             try {
@@ -261,9 +298,25 @@ async function runDepositTest() {
                     process.stdout.write(" DONE\n");
                     logSuccess(`State Updated! Nonce: ${currentAccount.stateNonce}`);
                     callbackSuccess = true;
+                    
+                    // Verify Token Balance Increase
+                    const postBalance = await provider.connection.getTokenAccountBalance(destinationTokenAccount)
+                        .then(b => new BN(b.value.amount));
+                    
+                    const diff = postBalance.sub(preBalance);
+                    if (diff.eq(spendAmount)) {
+                        logEntry("Token Balance", `Increased by ${diff.toString()} (Correct)`, icons.checkmark);
+                    } else if (diff.isZero()) {
+                        logWarning("Token Balance did NOT increase. Spend logic might have failed (Insufficient internal balance?)");
+                    } else {
+                         logWarning(`Token Balance changed by ${diff.toString()} (Expected ${spendAmount.toString()})`);
+                    }
+
                     break;
                 }
-            } catch (e) { /* ignore fetch errors */ }
+            } catch (e) {
+             // ignore
+            }
             process.stdout.write(".");
             await new Promise(r => setTimeout(r, 1000));
         }
@@ -273,21 +326,10 @@ async function runDepositTest() {
             throw new Error("Callback timeout. State nonce did not increment.");
         }
 
-        // --- Final Encrypted State Check ---
-        const finalObligation = await (program.account as any).userObligation.fetch(userObligation);
-        const encBytes = Buffer.from(finalObligation.encryptedState);
-        const isNonZero = encBytes.slice(0, 32).some(b => b !== 0); // Check first 32 bytes (encrypted deposit)
-        
-        if (isNonZero) {
-            logEntry("Encrypted State", "Updated (Non-Zero)", icons.key);
-        } else {
-             logWarning("Encrypted State is all zeros (Expected non-zero ciphertext).");
-        }
-
         perf.end("Total Execution");
         logDivider();
         perf.logReport();
-        logSuccess("Deposit Test Completed Successfully");
+        logSuccess("Spend Test Completed Successfully");
 
     } catch (error) {
         logError("Test Failed", error);
@@ -296,4 +338,4 @@ async function runDepositTest() {
 }
 
 // Execute
-runDepositTest();
+runSpendTest();

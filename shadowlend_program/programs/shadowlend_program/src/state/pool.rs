@@ -21,9 +21,6 @@ pub struct Pool {
     /// Total deposits in the pool (tracked for utilization)
     pub total_deposits: u64,
 
-    /// Total borrows from the pool
-    pub total_borrows: u64,
-
     /// PDA bump seed
     pub bump: u8,
 }
@@ -31,4 +28,6 @@ pub struct Pool {
 impl Pool {
     /// Seed prefix for Pool PDA derivation
     pub const SEED_PREFIX: &'static [u8] = b"pool_v2";
+
+    pub const SPACE: usize = 8 + 32 + 32 + 32 + 2 * 2 + 8 + 1;
 }

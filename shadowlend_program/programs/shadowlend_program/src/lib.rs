@@ -15,16 +15,17 @@ pub const COMP_DEF_OFFSET_WITHDRAW: u32 = comp_def_offset("withdraw");
 pub const COMP_DEF_OFFSET_BORROW: u32 = comp_def_offset("borrow");
 pub const COMP_DEF_OFFSET_REPAY: u32 = comp_def_offset("repay");
 pub const COMP_DEF_OFFSET_LIQUIDATE: u32 = comp_def_offset("liquidate");
+pub const COMP_DEF_OFFSET_SPEND: u32 = comp_def_offset("spend");
 
-declare_id!("FpHChpheLnvPS9Qd7DyXwSrvSc3KCELkx4BC5MTE8T7k");
+declare_id!("8oBm4S5orrmsp2sY13Ncvxtg8jAc2Vavh9X1fUMfdx1S");
 
 #[arcium_program]
 pub mod shadowlend_program {
     use super::*;
     use crate::error::ErrorCode;
     use crate::instructions::{
-        Borrow, BorrowCallback, ClosePool, Deposit, DepositCallback, InitializePool, Repay,
-        RepayCallback, Withdraw, WithdrawCallback,
+        Borrow, BorrowCallback, ClosePool, Deposit, DepositCallback, InitializePool, Liquidate,
+        LiquidateCallback, Repay, RepayCallback, Spend, SpendCallback, Withdraw, WithdrawCallback,
     };
 
     /// Initializes the lending pool with risk parameters.
@@ -88,9 +89,9 @@ pub mod shadowlend_program {
             &ctx.accounts.cluster_account,
             &ctx.accounts.computation_account,
         ) {
-            Ok(DepositOutput { field_0 }) => {
+            Ok(o) => {
                 msg!("Output verified successfully.");
-                field_0
+                o
             }
             Err(e) => {
                 msg!("Deposit verification failed: {}", e);
@@ -104,7 +105,18 @@ pub mod shadowlend_program {
             user_obligation.state_nonce
         );
 
-        user_obligation.encrypted_deposit = result.ciphertexts[0];
+        // Access UserState fields from result.field_0 which is SharedEncryptedStruct
+        let state = result.field_0;
+
+        // Unpack ciphertexts: [deposit, debt, internal]
+        let c = &state.ciphertexts;
+        if c.len() >= 3 {
+            user_obligation.encrypted_state[0..32].copy_from_slice(&c[0]);
+            user_obligation.encrypted_state[32..64].copy_from_slice(&c[1]);
+            user_obligation.encrypted_state[64..96].copy_from_slice(&c[2]);
+        }
+
+        user_obligation.is_initialized = true;
         user_obligation.state_nonce += 1;
 
         msg!(
@@ -117,15 +129,15 @@ pub mod shadowlend_program {
     /// Initiates a borrow request with confidential health check.
     ///
     /// Queues an MPC computation to verify the health factor remains above
-    /// the liquidation threshold. Token transfer occurs in callback if approved.
+    /// the liquidation threshold. If approved, internal credit is increased.
     ///
     /// # Arguments
     /// * `computation_offset` - Unique identifier for this Arcium computation
-    /// * `amount` - Token amount to borrow
+    /// * `amount` - Encrypted token amount to borrow
     pub fn borrow(
         ctx: Context<Borrow>,
         computation_offset: u64,
-        amount: u64,
+        amount: [u8; 32],
         user_pubkey: [u8; 32],
         user_nonce: u128,
     ) -> Result<()> {
@@ -141,10 +153,10 @@ pub mod shadowlend_program {
     /// Callback invoked by Arcium MXE after borrow health check completes.
     ///
     /// Verifies the MPC output and, if approved, updates encrypted debt and
-    /// transfers tokens from the borrow vault to the user using PDA signer.
+    /// encrypted internal balance. No token transfer occurs here (V3).
     ///
     /// # Arguments
-    /// * `output` - Contains: encrypted_debt, approval_status (1/0), amount
+    /// * `output` - Contains: new_state, approval_status
     #[arcium_callback(encrypted_ix = "borrow")]
     pub fn borrow_callback(
         ctx: Context<BorrowCallback>,
@@ -168,14 +180,10 @@ pub mod shadowlend_program {
         };
 
         let inner = result.field_0;
+        let state = inner.field_0;
         let approved = inner.field_1;
-        let amount = inner.field_2; // Revealed amount from circuit
 
-        msg!(
-            "Circuit result - Approved: {}, Amount: {}",
-            approved,
-            amount
-        );
+        msg!("Circuit result - Approved: {}", approved);
 
         if approved == 1 {
             let user_obligation = &mut ctx.accounts.user_obligation;
@@ -184,44 +192,19 @@ pub mod shadowlend_program {
                 user_obligation.state_nonce
             );
 
-            user_obligation.encrypted_borrow = inner.field_0.ciphertexts[0];
+            let c = &state.ciphertexts;
+            if c.len() >= 3 {
+                user_obligation.encrypted_state[0..32].copy_from_slice(&c[0]);
+                user_obligation.encrypted_state[32..64].copy_from_slice(&c[1]);
+                user_obligation.encrypted_state[64..96].copy_from_slice(&c[2]);
+            }
+
             user_obligation.state_nonce += 1;
 
-            // Vault PDA signs the transfer
-            let pool_key = ctx.accounts.pool.key();
-            let seeds: &[&[u8]] = &[
-                b"borrow_vault",
-                pool_key.as_ref(),
-                &[ctx.bumps.borrow_vault],
-            ];
-            let signer = &[&seeds[..]];
-
-            let transfer_cpi = Transfer {
-                from: ctx.accounts.borrow_vault.to_account_info(),
-                to: ctx.accounts.user_token_account.to_account_info(),
-                authority: ctx.accounts.borrow_vault.to_account_info(),
-            };
-
-            msg!("Transferring {} tokens to user...", amount);
-
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    transfer_cpi,
-                    signer,
-                ),
-                amount,
-            )?;
-
             msg!(
-                "Borrow approved, transferred {} tokens. New nonce: {}",
-                amount,
+                "Borrow approved. State updated. New nonce: {}",
                 user_obligation.state_nonce
             );
-
-            // Update global borrows
-            let pool = &mut ctx.accounts.pool;
-            pool.total_borrows = pool.total_borrows.checked_add(amount).ok_or(ErrorCode::MathOverflow)?;
         } else {
             msg!("Borrow rejected by health check (approved=0)");
         }
@@ -259,7 +242,7 @@ pub mod shadowlend_program {
     /// transfers tokens from the collateral vault to user using PDA signer.
     ///
     /// # Arguments
-    /// * `output` - Contains: encrypted_collateral, approval_status (1/0), amount
+    /// * `output` - Contains: new_state, approval_status (1/0), amount
     #[arcium_callback(encrypted_ix = "withdraw")]
     pub fn withdraw_callback(
         ctx: Context<WithdrawCallback>,
@@ -277,12 +260,21 @@ pub mod shadowlend_program {
         };
 
         let inner = result.field_0;
+        let state = inner.field_0;
         let approved = inner.field_1;
         let amount = inner.field_2;
 
         if approved == 1 {
             let user_obligation = &mut ctx.accounts.user_obligation;
-            user_obligation.encrypted_deposit = inner.field_0.ciphertexts[0];
+
+            let c = &state.ciphertexts;
+
+            if c.len() >= 3 {
+                user_obligation.encrypted_state[0..32].copy_from_slice(&c[0]);
+                user_obligation.encrypted_state[32..64].copy_from_slice(&c[1]);
+                user_obligation.encrypted_state[64..96].copy_from_slice(&c[2]);
+            }
+
             user_obligation.state_nonce += 1;
 
             // Vault PDA signs the transfer
@@ -345,7 +337,7 @@ pub mod shadowlend_program {
     /// debt balance with the new value after repayment.
     ///
     /// # Arguments
-    /// * `output` - Signed computation outputs containing new encrypted debt
+    /// * `output` - Signed computation outputs containing new encrypted state
     #[arcium_callback(encrypted_ix = "repay")]
     pub fn repay_callback(
         ctx: Context<RepayCallback>,
@@ -355,7 +347,7 @@ pub mod shadowlend_program {
             &ctx.accounts.cluster_account,
             &ctx.accounts.computation_account,
         ) {
-            Ok(RepayOutput { field_0 }) => field_0,
+            Ok(o) => o, // Changed to 'o' to keep the full struct
             Err(e) => {
                 msg!("Repay verification failed: {}", e);
                 return Err(ErrorCode::AbortedComputation.into());
@@ -363,7 +355,16 @@ pub mod shadowlend_program {
         };
 
         let user_obligation = &mut ctx.accounts.user_obligation;
-        user_obligation.encrypted_borrow = result.ciphertexts[0];
+        let state = result.field_0;
+
+        let c = &state.ciphertexts;
+        if c.len() >= 3 {
+            user_obligation.encrypted_state[0..32].copy_from_slice(&c[0]);
+            user_obligation.encrypted_state[32..64].copy_from_slice(&c[1]);
+            user_obligation.encrypted_state[64..96].copy_from_slice(&c[2]);
+        }
+
+        user_obligation.is_initialized = true; // Ensure flag is set on first interaction if any
         user_obligation.state_nonce += 1;
 
         msg!("Repay callback completed");
@@ -372,7 +373,7 @@ pub mod shadowlend_program {
 
     /// Initiates a confidential liquidation.
     ///
-    /// Liquidator transfers repayment tokens to escrow. 
+    /// Liquidator transfers repayment tokens to escrow.
     /// MPC verifies if user is unhealthy. If so, seizes collateral.
     /// If healthy, refund.
     pub fn liquidate(
@@ -398,7 +399,7 @@ pub mod shadowlend_program {
         output: SignedComputationOutputs<LiquidateOutput>,
     ) -> Result<()> {
         msg!("Liquidate callback START");
-        
+
         let result = match output.verify_output(
             &ctx.accounts.cluster_account,
             &ctx.accounts.computation_account,
@@ -411,22 +412,23 @@ pub mod shadowlend_program {
         };
 
         let inner = result.field_0;
-        
-        // Encrypted outputs are wrapped in structs with 'ciphertexts' field
-        let enc_deposit = inner.field_0.ciphertexts[0];
-        let enc_borrow = inner.field_1.ciphertexts[0];
+        let state = inner.field_0;
 
-        let is_liquidatable = inner.field_2; // 1 or 0
-        let seized_collateral = inner.field_3;
-        let repaid_amount = inner.field_4; // Echoed back amount
+        // Encrypted outputs are wrapped in structs with 'ciphertexts' field
+        let is_liquidatable = inner.field_1; // 1 or 0
+        let seized_collateral = inner.field_2;
+        let repaid_amount = inner.field_3; // Echoed back amount
 
         let user_obligation = &mut ctx.accounts.user_obligation;
-        
+
         // Always update state (nonce, encrypted balances)
-        // If query failed (healthy), circuit should output OLD balances (or unchanged).
-        // If succeeded, NEW balances.
-        user_obligation.encrypted_deposit = enc_deposit;
-        user_obligation.encrypted_borrow = enc_borrow;
+        let c = &state.ciphertexts;
+        if c.len() >= 3 {
+            user_obligation.encrypted_state[0..32].copy_from_slice(&c[0]);
+            user_obligation.encrypted_state[32..64].copy_from_slice(&c[1]);
+            user_obligation.encrypted_state[64..96].copy_from_slice(&c[2]);
+        }
+
         user_obligation.state_nonce += 1;
 
         if is_liquidatable == 1 {
@@ -456,14 +458,14 @@ pub mod shadowlend_program {
                 ),
                 seized_collateral,
             )?;
-            
+
             // Update Global Stats
             let pool = &mut ctx.accounts.pool;
-            // Debt decreased by repaid_amount
-            pool.total_borrows = pool.total_borrows.checked_sub(repaid_amount).unwrap_or(0);
             // Collateral decreased by seized_collateral (removed from vault)
-            pool.total_deposits = pool.total_deposits.checked_sub(seized_collateral).unwrap_or(0);
-
+            pool.total_deposits = pool
+                .total_deposits
+                .checked_sub(seized_collateral)
+                .unwrap_or(0);
         } else {
             msg!("Liquidation FAILED. User is healthy.");
             msg!("Refunding {} tokens to liquidator.", repaid_amount);
@@ -483,7 +485,7 @@ pub mod shadowlend_program {
                 to: ctx.accounts.liquidator_borrow_account.to_account_info(),
                 authority: ctx.accounts.borrow_vault.to_account_info(),
             };
-            
+
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
@@ -520,6 +522,102 @@ pub mod shadowlend_program {
     /// Initializes liquidate computation definition
     pub fn init_liquidate_comp_def(ctx: Context<InitLiquidateCompDef>) -> Result<()> {
         crate::instructions::admin::init_liquidate_comp_def_handler(ctx)
+    }
+
+    /// Initiates a confidential spend.
+    ///
+    /// Checks if internal balance is sufficient and updates it.
+    /// Queues computation.
+    pub fn spend(
+        ctx: Context<Spend>,
+        computation_offset: u64,
+        amount: u64,
+        user_pubkey: [u8; 32],
+        user_nonce: u128,
+    ) -> Result<()> {
+        crate::instructions::spend_handler(ctx, computation_offset, amount, user_pubkey, user_nonce)
+    }
+
+    /// Callback for confidential spend.
+    ///
+    /// Updates internal balance and transfers tokens if approved.
+    #[arcium_callback(encrypted_ix = "spend")]
+    pub fn spend_callback(
+        ctx: Context<SpendCallback>,
+        output: SignedComputationOutputs<SpendOutput>,
+    ) -> Result<()> {
+        let result = match output.verify_output(
+            &ctx.accounts.cluster_account,
+            &ctx.accounts.computation_account,
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                msg!("Spend verification failed: {}", e);
+                return Err(ErrorCode::AbortedComputation.into());
+            }
+        };
+
+        // Output: (NewInternal, Approved(u8), Amount(u64))
+        // Parse circuit results: (Enc<Shared, u128>, u8, u64)
+
+        let inner = result.field_0;
+        let state = inner.field_0;
+        let approved = inner.field_1;
+        let amount = inner.field_2;
+
+        if approved == 1 {
+            let user_obligation = &mut ctx.accounts.user_obligation;
+
+            // Update the confidential balance on the user obligation
+            let c = &state.ciphertexts;
+            if c.len() >= 3 {
+                user_obligation.encrypted_state[0..32].copy_from_slice(&c[0]);
+                user_obligation.encrypted_state[32..64].copy_from_slice(&c[1]);
+                user_obligation.encrypted_state[64..96].copy_from_slice(&c[2]);
+            }
+
+            user_obligation.state_nonce += 1;
+
+            // Prepare PDA seeds for the borrow vault to sign the outgoing transfer
+            let pool_key = ctx.accounts.pool.key();
+            let seeds: &[&[u8]] = &[
+                b"borrow_vault",
+                pool_key.as_ref(),
+                &[ctx.bumps.borrow_vault],
+            ];
+            let signer = &[&seeds[..]];
+
+            let transfer_cpi = Transfer {
+                from: ctx.accounts.borrow_vault.to_account_info(),
+                to: ctx.accounts.destination_token_account.to_account_info(),
+                authority: ctx.accounts.borrow_vault.to_account_info(),
+            };
+
+            msg!(
+                "Spend approved. Executing public transfer of {} tokens.",
+                amount
+            );
+
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    transfer_cpi,
+                    signer,
+                ),
+                amount,
+            )?;
+
+            // Total borrows tracking is removed as it cannot be accurate with confidential borrows
+        } else {
+            msg!("Spend rejected: Insufficient internal balance.");
+        }
+
+        Ok(())
+    }
+
+    /// Initializes spend computation definition
+    pub fn init_spend_comp_def(ctx: Context<InitSpendCompDef>) -> Result<()> {
+        crate::instructions::admin::init_spend_comp_def_handler(ctx)
     }
 
     /// Closes the lending pool (admin only)

@@ -1,38 +1,28 @@
-use super::accounts::Withdraw;
-use super::callback::WithdrawCallback;
-use crate::error::ErrorCode;
+use crate::instructions::spend::{accounts::Spend, callback::SpendCallback};
 use anchor_lang::prelude::*;
 use arcium_anchor::prelude::*;
 use arcium_client::idl::arcium::types::CallbackAccount;
 
-/// Processes a withdrawal request by queuing a confidential MPC health check.
-///
-/// Constructs circuit arguments with encrypted collateral and debt balances, then queues
-/// an Arcium computation to verify the health factor after withdrawal. If the check passes,
-/// the callback will update encrypted collateral and transfer tokens from the vault to user.
-///
-/// # Arguments
-/// * `ctx` - Anchor context with withdraw accounts
-/// * `computation_offset` - Unique identifier for this Arcium computation
-/// * `amount` - Token amount to withdraw (must be > 0)
-pub fn withdraw_handler(
-    ctx: Context<Withdraw>,
+pub fn spend_handler(
+    ctx: Context<Spend>,
     computation_offset: u64,
     amount: u64,
     user_pubkey: [u8; 32],
     user_nonce: u128,
 ) -> Result<()> {
-    require!(amount > 0, ErrorCode::InvalidAmount);
-
+    
     let user_obligation = &ctx.accounts.user_obligation;
     let pool = &ctx.accounts.pool;
-    let ltv_bps = pool.ltv_bps as u64;
 
-    let mut args = ArgBuilder::new()
-        .plaintext_u64(amount)
-        .x25519_pubkey(user_pubkey)
-        .plaintext_u128(user_nonce);
+    let mut args = ArgBuilder::new();
 
+    // Map public spend amount to circuit arguments
+    args = args.plaintext_u64(amount);
+
+    // Provide encryption context for account loading
+    args = args.x25519_pubkey(user_pubkey).plaintext_u128(user_nonce);
+
+    // Encrypted internal balance retrieval from UserObligation
     // Offset 72 starts at `encrypted_state`. Length is 96 bytes.
     args = if user_obligation.is_initialized {
         args.account(user_obligation.key(), 72u32, 96u32)
@@ -42,19 +32,18 @@ pub fn withdraw_handler(
             .encrypted_u128([0u8; 32])
     };
 
-    args = args.plaintext_u64(ltv_bps);
-
-    // Add is_initialized flag
+    // Flag to indicate if internal balance state exists
     args = args.plaintext_u8(if user_obligation.is_initialized { 1 } else { 0 });
-
+    
     ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
 
+    // Queue MPC computation to verify internal balance and approve spend
     queue_computation(
         ctx.accounts,
         computation_offset,
         args.build(),
         None,
-        vec![WithdrawCallback::callback_ix(
+        vec![SpendCallback::callback_ix(
             computation_offset,
             &ctx.accounts.mxe_account,
             &[
@@ -67,11 +56,11 @@ pub fn withdraw_handler(
                     is_writable: true,
                 },
                 CallbackAccount {
-                    pubkey: ctx.accounts.user_token_account.key(),
+                    pubkey: ctx.accounts.destination_token_account.key(),
                     is_writable: true,
                 },
                 CallbackAccount {
-                    pubkey: ctx.accounts.collateral_vault.key(),
+                    pubkey: ctx.accounts.borrow_vault.key(),
                     is_writable: true,
                 },
                 CallbackAccount {
@@ -84,6 +73,6 @@ pub fn withdraw_handler(
         0,
     )?;
 
-    msg!("Queued withdraw computation for {} tokens", amount);
+    msg!("Queued spend computation for {} tokens", amount);
     Ok(())
 }

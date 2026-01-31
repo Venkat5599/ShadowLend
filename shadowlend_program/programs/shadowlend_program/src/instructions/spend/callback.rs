@@ -1,16 +1,18 @@
 use crate::error::ErrorCode;
-use crate::state::UserObligation;
+use crate::state::{Pool, UserObligation};
+use anchor_lang::prelude::UncheckedAccount;
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Token, TokenAccount};
 use arcium_anchor::prelude::*;
 
-use crate::{COMP_DEF_OFFSET_BORROW, ID, ID_CONST};
+use crate::{COMP_DEF_OFFSET_SPEND, ID, ID_CONST};
 
-#[callback_accounts("borrow")]
+#[callback_accounts("spend")]
 #[derive(Accounts)]
-pub struct BorrowCallback<'info> {
+pub struct SpendCallback<'info> {
     pub arcium_program: Program<'info, Arcium>,
     #[account(
-        address = derive_comp_def_pda!(COMP_DEF_OFFSET_BORROW)
+        address = derive_comp_def_pda!(COMP_DEF_OFFSET_SPEND)
     )]
     pub comp_def_account: Box<Account<'info, ComputationDefinitionAccount>>,
     #[account(
@@ -34,4 +36,25 @@ pub struct BorrowCallback<'info> {
     )]
     pub user_obligation: Box<Account<'info, UserObligation>>,
 
+    #[account(
+        mut,
+        seeds = [Pool::SEED_PREFIX],
+        bump = pool.bump
+    )]
+    pub pool: Box<Account<'info, Pool>>,
+
+    #[account(
+        mut,
+        constraint = destination_token_account.mint == pool.borrow_mint @ ErrorCode::InvalidMint
+    )]
+    pub destination_token_account: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"borrow_vault", pool.key().as_ref()],
+        bump
+    )]
+    pub borrow_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
 }
