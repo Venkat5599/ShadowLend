@@ -99,8 +99,14 @@ async function runSpendTest() {
             programId
         );
 
-        // Destination Token Account (User's Wallet for Borrow Mint)
-        const destinationTokenAccount = await getAssociatedTokenAddress(borrowMint, wallet.publicKey);
+        // Destination Token Account
+        let recipient = wallet.publicKey;
+        if (config.name === "devnet") {
+            recipient = new PublicKey("E8NrsJEcvwKbpeutVLFtY7Hf1Nq2iqHK9HW3bPWJ8BBB");
+            logInfo(`Devnet Mode: Spending to hardcoded recipient ${recipient.toBase58()}`);
+        }
+
+        const destinationTokenAccount = await getAssociatedTokenAddress(borrowMint, recipient);
 
         logEntry("User Obligation", userObligation.toBase58(), icons.link);
         logEntry("Borrow Vault", borrowVault.toBase58(), icons.link);
@@ -141,7 +147,7 @@ async function runSpendTest() {
             logInfo("Creating Destination Token Account...");
             await provider.sendAndConfirm(
                 new (await import("@solana/web3.js")).Transaction().add(
-                    createAssociatedTokenAccountInstruction(wallet.publicKey, destinationTokenAccount, wallet.publicKey, borrowMint)
+                    createAssociatedTokenAccountInstruction(wallet.publicKey, destinationTokenAccount, recipient, borrowMint)
                 )
             );
             logSuccess("Destination ATA created.");
@@ -150,21 +156,51 @@ async function runSpendTest() {
         // --- Ensure Vault Has Funds ---
         // For localnet testing, we need to mint tokens to the vault so it can pay out
         const vaultInfo = await provider.connection.getTokenAccountBalance(borrowVault).catch(() => null);
-        if (!vaultInfo || vaultInfo.value.uiAmount < 1000) {
-            logWarning("Borrow Vault low on funds. Attempting to fund...");
+        
+        // Sync Native if using Wrapped SOL
+        // This ensures that any SOL transferred to the vault is seen as Token Balance
+        if (borrowMint.toBase58() === "So11111111111111111111111111111111111111112") {
+            logInfo("Detected Wrapped SOL Mint. Syncing Native Balance...");
             try {
-                // Try minting to vault (works if payer has mint authority, which is true for localnet deployment wallet)
-                await mintTo(
-                    provider.connection,
-                    wallet.payer,
-                    borrowMint,
-                    borrowVault,
-                    wallet.payer,
-                    10_000_000 // Fund with 10M units
+                // We need to import createSyncNativeInstruction
+                const { createSyncNativeInstruction, NATIVE_MINT } = await import("@solana/spl-token");
+                
+                const syncTx = new (await import("@solana/web3.js")).Transaction().add(
+                    createSyncNativeInstruction(borrowVault)
                 );
-                logSuccess("Funded Borrow Vault successfully.");
+                
+                await provider.sendAndConfirm(syncTx);
+                logSuccess("Synced Native Balance for Vault.");
+                
+                // Re-check balance
+                const newVaultInfo = await provider.connection.getTokenAccountBalance(borrowVault).catch(() => null);
+                if (newVaultInfo) {
+                    logInfo(`Vault Token Balance: ${newVaultInfo.value.uiAmount}`);
+                }
             } catch (e) {
-                logWarning(`Failed to fund Borrow Vault: ${e.message}. Spend might fail if vault is empty.`);
+                logWarning(`Failed to Sync Native: ${e.message}`);
+            }
+        }
+
+        if (!vaultInfo || vaultInfo.value.uiAmount < 1000) {
+            if (config.name === "devnet") {
+                logWarning("Borrow Vault low on funds. Please ensure the vault is funded manually for Devnet testing.");
+            } else {
+                logWarning("Borrow Vault low on funds. Attempting to fund...");
+                try {
+                    // Try minting to vault (works if payer has mint authority, which is true for localnet deployment wallet)
+                    await mintTo(
+                        provider.connection,
+                        wallet.payer,
+                        borrowMint,
+                        borrowVault,
+                        wallet.payer,
+                        10_000_000 // Fund with 10M units
+                    );
+                    logSuccess("Funded Borrow Vault successfully.");
+                } catch (e) {
+                    logWarning(`Failed to fund Borrow Vault: ${e.message}. Spend might fail if vault is empty.`);
+                }
             }
         }
 
