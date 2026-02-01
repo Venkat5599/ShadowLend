@@ -4,14 +4,10 @@
  */
 
 import { PublicKey } from '@solana/web3.js'
+import { AppConfig } from '@/constants/app-config'
 
 // Program ID from deployment
-// Updated: 2026-01-30 - Program ID from friend, cluster offset 456
-export const PROGRAM_ID = new PublicKey('FpHChpheLnvPS9Qd7DyXwSrvSc3KCELkx4BC5MTE8T7k')
-
-// Arcium Program ID
-// Updated: 2026-01-30 - Arcium deployment
-export const ARCIUM_PROGRAM_ID = new PublicKey('Arcj82pX7HxYKLR92qvgZUAd7vGS1k4hQvAFcPATFdEQ')
+export const PROGRAM_ID = new PublicKey(AppConfig.programId)
 
 // PDA Seeds
 export const POOL_SEED = 'pool'

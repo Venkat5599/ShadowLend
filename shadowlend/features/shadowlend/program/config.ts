@@ -1,48 +1,29 @@
 /**
  * ShadowLend Deployment Configuration
- * Loads deployment info for the current network
+ * Loads deployment info from AppConfig
  */
 
 import { PublicKey } from '@solana/web3.js'
 import type { DeploymentConfig } from './types'
+import { AppConfig } from '@/constants/app-config'
 
-// Default deployment config (from deployment.json)
-// Updated: 2026-01-30 - Program ID from friend, cluster offset 456
-const DEFAULT_DEPLOYMENT: DeploymentConfig = {
-  programId: 'FpHChpheLnvPS9Qd7DyXwSrvSc3KCELkx4BC5MTE8T7k',
-  poolPda: 'AsYVZhy1twfeP1b6hALiYmSzLc1G2GRufKG4sL1o63us',
-  collateralMint: 'So11111111111111111111111111111111111111112', // Wrapped SOL
-  borrowMint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU', // Test USDC
-  collateralVault: '5fSQMEi2Ja5h2fQpvgBPCuLBzWmGRn4imtCuFdWaUra4',
-  borrowVault: '8ZC4YDurkQoU6hBokknMRD9uY2T5LMYGrZ41Ku7eBBxp',
+const getDeployment = (): DeploymentConfig => ({
+  programId: AppConfig.programId,
+  poolPda: '2UDxdmiCuq1nYDvEYx1UTLGAPB3dZeX8bG51pw3ieQiY', // From deployment.json
+  collateralMint: '2YUtZWmyZnAvQFbawWzD6JeNH8oJgE2MuDtdPv2KRzE7',
+  borrowMint: 'Cuj8ft28zCGwhmjb1uh8e2nZcbsYaoytUDjUABAcxtrr',
+  collateralVault: '6hMRTLUM3uPEZyUz3A4wLhvWGcXyCfzbBYpcYXcTzhCF', // From init-pool logs
+  borrowVault: '8kQpnhoowLtec9pUQW6jDwnLSyNc9uQsiYSnLGCKewYb', // From init-pool logs
   admin: '9AVaR6JcQaX6CJwg5fNivx2qEAQ2nKAn86DRi7vL5kK2',
-  deployedAt: '2026-01-30T00:00:00.000Z',
-  network: 'devnet',
-}
-
-// Devnet deployment (same as default for now)
-const DEVNET_DEPLOYMENT = DEFAULT_DEPLOYMENT
-
-// Localnet deployment (for testing)
-const LOCALNET_DEPLOYMENT: DeploymentConfig = {
-  ...DEFAULT_DEPLOYMENT,
+  deployedAt: new Date().toISOString(),
   network: 'localnet',
-}
+})
 
 /**
  * Get deployment config for a specific network
  */
 export function getDeploymentConfig(network: 'devnet' | 'localnet' | 'mainnet' = 'devnet'): DeploymentConfig {
-  switch (network) {
-    case 'devnet':
-      return DEVNET_DEPLOYMENT
-    case 'localnet':
-      return LOCALNET_DEPLOYMENT
-    case 'mainnet':
-      throw new Error('Mainnet deployment not available yet')
-    default:
-      return DEFAULT_DEPLOYMENT
-  }
+    return getDeployment()
 }
 
 /**

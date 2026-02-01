@@ -1,6 +1,3 @@
-import { Platform } from 'react-native'
+// Buffer polyfill for Solana/Arcium SDKs
+global.Buffer = require('buffer').Buffer
 
-if (Platform.OS !== 'web') {
-  const { install } = require('react-native-quick-crypto')
-  install()
-}

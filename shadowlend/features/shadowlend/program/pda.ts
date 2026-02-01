@@ -6,17 +6,12 @@
 import { PublicKey } from '@solana/web3.js'
 import { PROGRAM_ID } from './types'
 
-// Helper to convert string to Uint8Array
-function stringToBytes(str: string): Uint8Array {
-  return new TextEncoder().encode(str)
-}
-
 // PDA Seeds (matching backend)
-const POOL_SEED = stringToBytes('pool')
-const VAULT_SEED = stringToBytes('vault')
-const OBLIGATION_SEED = stringToBytes('obligation')
-const COLLATERAL_SUFFIX = stringToBytes('collateral')
-const BORROW_SUFFIX = stringToBytes('borrow')
+const POOL_SEED = Buffer.from('pool')
+const VAULT_SEED = Buffer.from('vault')
+const OBLIGATION_SEED = Buffer.from('obligation')
+const COLLATERAL_SUFFIX = Buffer.from('collateral')
+const BORROW_SUFFIX = Buffer.from('borrow')
 
 /**
  * Derives the Pool PDA address

@@ -5,6 +5,8 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js'
+import { BN } from '@coral-xyz/anchor'
+
 import { useConnection } from './use-connection'
 import { usePoolAddresses } from './use-pool'
 import { useWallet } from '@/features/account/use-wallet'
@@ -80,7 +82,7 @@ function buildDepositInstruction(params: {
   collateralMint: PublicKey
   userTokenAccount: PublicKey
   collateralVault: PublicKey
-  computationOffset: bigint
+  computationOffset: BN
   amount: bigint
   userPubkey: Uint8Array
   userNonce: bigint
@@ -108,7 +110,7 @@ function buildDepositInstruction(params: {
   // Encode instruction data: discriminator + computation_offset (u64) + amount (u64) + user_pubkey ([u8; 32]) + user_nonce (u128)
   const data = new Uint8Array(8 + 8 + 8 + 32 + 16)
   data.set(DEPOSIT_DISCRIMINATOR, 0)
-  writeU64LE(data, computationOffset, 8)
+  data.set(computationOffset.toArray('le', 8), 8)
   writeU64LE(data, amount, 16)
   data.set(userPubkey, 24) // 32 bytes for user_pubkey
   writeU128LE(data, userNonce, 56) // 16 bytes for user_nonce
@@ -177,14 +179,15 @@ export function useDeposit(network: 'devnet' | 'localnet' = 'devnet') {
       const userCollateralAta = getAssociatedTokenAddress(addresses.collateralMint, userPublicKey)
 
       // Generate random computation offset for Arcium MXE
-      const computationOffset = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER))
+      const computationOffset = new BN(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER))
 
       // Generate user encryption parameters
       // For now, use placeholder values - in production, these would be derived from user's keypair
       const userPubkey = new Uint8Array(32).fill(0) // Placeholder X25519 public key
       const userNonce = BigInt(Date.now()) // Use timestamp as nonce
 
-      // Build transaction
+      // Build transaction. Wrap in try/catch for error handling.
+      try {
       const transaction = new Transaction()
 
       // Check if user's collateral ATA exists, create if not
@@ -219,6 +222,7 @@ export function useDeposit(network: 'devnet' | 'localnet' = 'devnet') {
       // Set fee payer
       transaction.feePayer = userPublicKey
 
+      console.log('Arcium Ephemeral Key (Placeholder):', new PublicKey(userPubkey).toBase58())
       // Sign and send transaction
       let signature: string
 
@@ -247,6 +251,13 @@ export function useDeposit(network: 'devnet' | 'localnet' = 'devnet') {
       }
 
       return { signature, amount }
+    } catch (error: any) {
+      console.error('Deposit failed:', error)
+      if (error.message?.includes('Attempt to debit an account but found no record of a prior credit')) {
+        throw new Error('Insufficient SOL. Please airdrop funds to your wallet (Localnet).')
+      }
+      throw error
+    }
     },
     onSuccess: () => {
       // Invalidate relevant queries to refetch data
