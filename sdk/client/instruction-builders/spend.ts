@@ -4,7 +4,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { program } from "@/idl";
+import { program } from "../../idl";
 import {
   getMempoolAccAddress,
   getExecutingPoolAccAddress,
@@ -12,42 +12,37 @@ import {
   getCompDefAccOffset,
   getCompDefAccAddress,
   getClusterAccAddress,
-  getArciumProgram,
+  getFeePoolAccAddress,
+  getClockAccAddress,
+  getArciumProgramId,
 } from "@arcium-hq/client";
 
-import { ARCIUM_DEVNET_CLUSTER_OFFSET } from "@/constants/arcium";
-import { SpendInstructionParams } from "@/client/interfaces/spend";
-import { 
-  getMxeAccount, 
-  generateComputationOffset 
-} from "@/client/generation/arcium";
+import { ARCIUM_LOCALNET_CLUSTER_OFFSET } from "../../constants/arcium";
+import { SpendInstructionParams } from "../interfaces";
+import {
+  getMxeAccount,
+  generateComputationOffset,
+  getPoolAccount,
+  getUserObligationAccount,
+  getBorrowVaultAccount,
+  getSignPdaAccount,
+} from "../generation";
 
 /**
- * Builds a valid Solana instruction for spending (transferring out) borrowed assets.
- * 
+ * Builds a valid Solana instruction for spending borrowed assets from the ShadowLend protocol.
+ *
  * @remarks
- * "Spending" in this context refers to moving assets from the protocol's vault to the user's wallet.
- * This is effectively a withdrawal of borrowed funds.
- * 
+ * This function handles the construction of the confidential spend interaction.
+ * The `amount` parameter must be encrypted client-side.
+ *
  * @param params - The parameters required for the spend instruction.
  * @param params.user - The user's wallet public key (payer).
- * @param params.borrowMint - The mint address of the token being spent (e.g. USDC).
- * @param params.amount - The amount to spend (in atomic units).
+ * @param params.borrowMint - The mint address of the borrowed token.
+ * @param params.amount - The encrypted amount to spend (ciphertext).
  * @param params.userNonce - The user's current replay protection nonce.
  * @param params.userPublicKey - The user's Arcium X25519 public key.
- * 
+ *
  * @returns A Promise that resolves to the TransactionInstruction.
- * 
- * @example
- * ```ts
- * const ix = await buildSpendInstruction({
- *   user: wallet.publicKey,
- *   borrowMint: usdcMint,
- *   amount: toU64(5000000), // 5 USDC
- *   userNonce: currentNonce,
- *   userPublicKey: userArciumKey
- * });
- * ```
  */
 export async function buildSpendInstruction({
   user,
@@ -57,7 +52,7 @@ export async function buildSpendInstruction({
   userPublicKey,
 }: SpendInstructionParams) {
   const programId = program.programId;
-  const arciumClusterOffset = ARCIUM_DEVNET_CLUSTER_OFFSET;
+  const arciumClusterOffset = ARCIUM_LOCALNET_CLUSTER_OFFSET;
 
   // --- Arcium Accounts ---
   const computationOffset = generateComputationOffset();
@@ -76,10 +71,17 @@ export async function buildSpendInstruction({
   const compDefAccount = getCompDefAccAddress(programId, compDefOffset);
 
   const clusterAccount = getClusterAccAddress(arciumClusterOffset);
-  
-  // Destination token account: "destination_token_account" in IDL.
-  // It is NOT a PDA of signatures. It's just a writable account.
-  // Usually this is the user's ATA for the borrowed token (borrowMint).
+  const poolAccount = getFeePoolAccAddress();
+  const clockAccount = getClockAccAddress();
+  const arciumProgramId = getArciumProgramId();
+
+  // --- Solana / ShadowLend Accounts ---
+  const signPdaAccount = getSignPdaAccount();
+  const pool = getPoolAccount();
+  const userObligation = getUserObligationAccount(user, pool);
+  const borrowVault = getBorrowVaultAccount(pool);
+
+  // Destination token account
   const destinationTokenAccount = getAssociatedTokenAddressSync(
     borrowMint,
     user,
@@ -88,22 +90,30 @@ export async function buildSpendInstruction({
     ASSOCIATED_TOKEN_PROGRAM_ID,
   );
 
-  // Convert keys to number arrays for IDL compatibility
+  // Convert keys
   const userPublicKeyArray = Array.from(userPublicKey);
 
   const instruction = await program.methods
     .spend(computationOffset, amount, userPublicKeyArray, userNonce)
     .accounts({
       payer: user,
-      mxe_account: mxeAccount,
-      mempool_account: mempoolAccount,
-      executing_pool: executingPool,
-      computation_account: computationAccount,
-      comp_def_account: compDefAccount,
-      cluster_account: clusterAccount,
-      destination_token_account: destinationTokenAccount,
-      // borrow_vault is auto-resolved
-    })
+      signPdaAccount: signPdaAccount,
+      mxeAccount: mxeAccount,
+      mempoolAccount: mempoolAccount,
+      executingPool: executingPool,
+      computationAccount: computationAccount,
+      compDefAccount: compDefAccount,
+      clusterAccount: clusterAccount,
+      poolAccount: poolAccount,
+      clockAccount: clockAccount,
+      pool: pool,
+      userObligation: userObligation,
+      destinationTokenAccount: destinationTokenAccount,
+      borrowVault: borrowVault,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      arciumProgram: arciumProgramId,
+    } as any)
     .instruction();
 
   return instruction;
