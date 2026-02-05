@@ -56,16 +56,13 @@ pub fn borrow_handler(
         ctx.accounts,
         computation_offset,
         args,
-        None,
         vec![BorrowCallback::callback_ix(
             computation_offset,
             &ctx.accounts.mxe_account,
-            &[
-                CallbackAccount {
-                    pubkey: user_obligation_key,
-                    is_writable: true,
-                },
-            ],
+            &[CallbackAccount {
+                pubkey: user_obligation_key,
+                is_writable: true,
+            }],
         )?],
         1,
         0,
