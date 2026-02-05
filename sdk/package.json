@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc && tsc-alias",
     "docs": "typedoc",
+    "docs:open": "xdg-open docs/index.html",
     "format": "prettier --write .",
     "test:deposit": "ts-node -r tsconfig-paths/register --project tests/tsconfig.json tests/test-deposit.ts",
     "test:borrow": "ts-node -r tsconfig-paths/register --project tests/tsconfig.json tests/test-borrow.ts",
